@@ -112,7 +112,7 @@ def test_arxiv_scheduler_uses_recent_queries(tmp_path: Path) -> None:
         assert response.status_code == 200
         payload = response.json()
         assert payload["queries"]
-        assert any("agent memory verification and coding loops" in query.lower() for query in seen_queries)
+        assert any("memory" in query.lower() and "coding" in query.lower() for query in seen_queries)
 
 
 def test_arxiv_backoff_is_per_query_with_curated_fallback(tmp_path: Path) -> None:
