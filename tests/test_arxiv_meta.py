@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -34,47 +35,54 @@ def create_seed_objects(client: TestClient) -> tuple[str, str]:
 
 def test_paper_ingestion_caches_and_digests(tmp_path: Path) -> None:
     client = make_client(tmp_path)
-    service = client.app.state.services.paper_digest_service
+    with (
+        patch.object(
+            client.app.state.services.paper_digest_service,
+            "_fetch_arxiv_entries",
+            return_value=[
+                {
+                    "id": "paper_test",
+                    "source_type": "paper",
+                    "source_ref": "https://arxiv.org/abs/2601.00001",
+                    "title": "Test Paper",
+                    "summary": "A paper about agent memory and evaluation.",
+                    "novelty_score": 0.8,
+                    "trust_score": 0.85,
+                    "license": "arXiv",
+                    "pdf_url": "https://arxiv.org/pdf/2601.00001.pdf",
+                    "published": "2026-01-01T00:00:00Z",
+                }
+            ],
+        ),
+        patch.object(client.app.state.services.paper_digest_service, "_download_pdf_bytes", return_value=b"%PDF-1.4 fake"),
+        patch.object(
+            client.app.state.services.paper_digest_service,
+            "_extract_pdf_text",
+            return_value="Abstract This paper studies agent memory and evaluation. 1 Introduction The method improves retrieval reliability.",
+        ),
+    ):
+        first = client.post(
+            "/papers/arxiv/ingest",
+            json={"query": "agent memory evaluation", "max_results": 3, "force": True, "digest_top_n": 1},
+        )
+        assert first.status_code == 200
+        payload = first.json()
+        assert payload["cached"] is False
+        assert len(payload["results"]) == 1
+        assert len(payload["digests"]) == 1
+        assert "agent memory" in payload["digests"][0]["summary"].lower()
 
-    service._fetch_arxiv_entries = lambda query, max_results: [  # type: ignore[method-assign]
-        {
-            "id": "paper_test",
-            "source_type": "paper",
-            "source_ref": "https://arxiv.org/abs/2601.00001",
-            "title": "Test Paper",
-            "summary": "A paper about agent memory and evaluation.",
-            "novelty_score": 0.8,
-            "trust_score": 0.85,
-            "license": "arXiv",
-            "pdf_url": "https://arxiv.org/pdf/2601.00001.pdf",
-            "published": "2026-01-01T00:00:00Z",
-        }
-    ]
-    service._download_pdf_bytes = lambda pdf_url: b"%PDF-1.4 fake"  # type: ignore[method-assign]
-    service._extract_pdf_text = lambda pdf_path: "Abstract This paper studies agent memory and evaluation. 1 Introduction The method improves retrieval reliability."  # type: ignore[method-assign]
+        second = client.post(
+            "/papers/arxiv/ingest",
+            json={"query": "agent memory evaluation", "max_results": 3, "force": False, "digest_top_n": 1},
+        )
+        assert second.status_code == 200
+        second_payload = second.json()
+        assert second_payload["cached"] is True
 
-    first = client.post(
-        "/papers/arxiv/ingest",
-        json={"query": "agent memory evaluation", "max_results": 3, "force": True, "digest_top_n": 1},
-    )
-    assert first.status_code == 200
-    payload = first.json()
-    assert payload["cached"] is False
-    assert len(payload["results"]) == 1
-    assert len(payload["digests"]) == 1
-    assert "agent memory" in payload["digests"][0]["summary"].lower()
-
-    second = client.post(
-        "/papers/arxiv/ingest",
-        json={"query": "agent memory evaluation", "max_results": 3, "force": False, "digest_top_n": 1},
-    )
-    assert second.status_code == 200
-    second_payload = second.json()
-    assert second_payload["cached"] is True
-
-    digests = client.get("/papers/digests")
-    assert digests.status_code == 200
-    assert len(digests.json()) == 1
+        digests = client.get("/papers/digests")
+        assert digests.status_code == 200
+        assert len(digests.json()) == 1
 
 
 def test_arxiv_scheduler_uses_recent_queries(tmp_path: Path) -> None:
@@ -87,19 +95,22 @@ def test_arxiv_scheduler_uses_recent_queries(tmp_path: Path) -> None:
     )
 
     seen_queries: list[str] = []
-    client.app.state.services.paper_digest_service.ingest_query = lambda query, max_results=None, force=False, digest_top_n=None: seen_queries.append(query) or {  # type: ignore[method-assign]
-        "query": query,
-        "results": [],
-        "digests": [],
-        "cached": False,
-        "backoff_active": False,
-    }
+    def fake_ingest(query, max_results=None, force=False, digest_top_n=None):  # noqa: ARG001
+        seen_queries.append(query)
+        return {
+            "query": query,
+            "results": [],
+            "digests": [],
+            "cached": False,
+            "backoff_active": False,
+        }
 
-    response = client.post("/ops/arxiv/run-once")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["queries"]
-    assert any("agent memory verification and coding loops" in query.lower() for query in seen_queries)
+    with patch.object(client.app.state.services.paper_digest_service, "ingest_query", side_effect=fake_ingest):
+        response = client.post("/ops/arxiv/run-once")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["queries"]
+        assert any("agent memory verification and coding loops" in query.lower() for query in seen_queries)
 
 
 def test_execute_meta_improvement_creates_mutation_job(tmp_path: Path) -> None:
