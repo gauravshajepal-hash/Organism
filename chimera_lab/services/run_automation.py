@@ -77,6 +77,14 @@ class RunAutomation:
             source_candidates = list(feed_items) + list(live_sources)
             source_quality_gate = self.assimilation_service.grade_source_bundle(query, source_candidates)
             absorption_candidates = self.assimilation_service.evaluate_candidates(source_candidates[:8], question=query, auto_stage=False)
+            for item in source_candidates:
+                source_ref = str(item.get("source_ref", "")).strip()
+                if source_ref:
+                    self.storage.record_scout_feedback(source_ref, referenced_count=1, last_event="research_ingest")
+            for candidate in absorption_candidates:
+                source_ref = str(candidate.get("source_ref", "")).strip()
+                if source_ref and candidate.get("worthy"):
+                    self.storage.record_scout_feedback(source_ref, actionable_count=1, last_event="actionable_candidate")
             payload["feed_sync_refs"] = synced_refs
             payload["live_sources"] = [item["source_ref"] for item in live_sources]
             payload["scout_query_plan"] = scout_query_plan
