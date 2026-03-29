@@ -206,7 +206,7 @@ class AssimilationService:
 
         worthy = recommended_action in {"stage_meta_improvement", "benchmark_only"} and absorption_score >= 0.48
         staged = None
-        if auto_stage and recommended_action == "stage_meta_improvement" and absorption_score >= 0.68:
+        if auto_stage and recommended_action == "stage_meta_improvement" and absorption_score >= 0.60:
             target, objective = self._stage_target(source_ref, title, focus)
             staged = self.research_evolution_lab.stage_meta_improvement(target=target, objective=objective, candidate_count=3)
             self.artifact_store.create(
