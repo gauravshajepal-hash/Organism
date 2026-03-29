@@ -20,8 +20,12 @@ class Settings:
     skills_dir: Path
     git_root: Path
     git_remote_url: str
+    git_mirror_remote_url: str | None
+    git_mirror_remote_name: str
     git_branch: str
     git_auto_push: bool
+    git_backup_tags_enabled: bool
+    git_backup_tag_prefix: str
     ollama_url: str
     local_model: str
     ollama_timeout_seconds: int
@@ -92,8 +96,12 @@ def load_settings() -> Settings:
         skills_dir=Path(os.getenv("CHIMERA_SKILLS_DIR", "skills")).resolve(),
         git_root=Path(os.getenv("CHIMERA_GIT_ROOT", ".")).resolve(),
         git_remote_url=os.getenv("CHIMERA_GIT_REMOTE_URL", "https://github.com/gauravshajepal-hash/Organism.git"),
+        git_mirror_remote_url=(os.getenv("CHIMERA_GIT_MIRROR_REMOTE_URL") or "").strip() or None,
+        git_mirror_remote_name=os.getenv("CHIMERA_GIT_MIRROR_REMOTE_NAME", "mirror").strip() or "mirror",
         git_branch=os.getenv("CHIMERA_GIT_BRANCH", "main").strip(),
         git_auto_push=_env_flag("CHIMERA_GIT_AUTOPUSH", True),
+        git_backup_tags_enabled=_env_flag("CHIMERA_GIT_BACKUP_TAGS_ENABLED", True),
+        git_backup_tag_prefix=os.getenv("CHIMERA_GIT_BACKUP_TAG_PREFIX", "backup").strip() or "backup",
         ollama_url=os.getenv("CHIMERA_OLLAMA_URL", "http://127.0.0.1:11434"),
         local_model=os.getenv("CHIMERA_LOCAL_MODEL", "qwen2.5-coder:7b"),
         ollama_timeout_seconds=int(os.getenv("CHIMERA_OLLAMA_TIMEOUT_SECONDS", "240")),
