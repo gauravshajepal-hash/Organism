@@ -114,6 +114,7 @@ def test_git_checkpoint_reconciles_non_fast_forward_push(tmp_path: Path) -> None
     remote = tmp_path / "remote.git"
     clone = tmp_path / "remote_clone"
     subprocess.run(["git", "clone", str(remote), str(clone)], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(clone), "checkout", "-b", "main", "origin/main"], check=True, capture_output=True, text=True)
     subprocess.run(["git", "-C", str(clone), "config", "user.name", "Remote User"], check=True, capture_output=True, text=True)
     subprocess.run(["git", "-C", str(clone), "config", "user.email", "remote@example.com"], check=True, capture_output=True, text=True)
     (clone / "README.md").write_text("seed\nremote\n", encoding="utf-8")

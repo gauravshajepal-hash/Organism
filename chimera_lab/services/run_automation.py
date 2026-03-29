@@ -97,7 +97,8 @@ class RunAutomation:
             payload["autoresearch_id"] = autoresearch["id"]
             payload["autoresearch_summary"] = {
                 "best_score": autoresearch["best_iteration"]["score"],
-                "iterations": len(autoresearch["iterations"]),
+                "iterations": autoresearch["iteration_budget"],
+                "candidate_count": len(autoresearch["iterations"]),
             }
             payload["memory_context"] = self.memory_tiers.retrieve(query, limit=5)
             payload["source_trace_required"] = True
