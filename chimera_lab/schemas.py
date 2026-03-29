@@ -301,6 +301,12 @@ class ScoutFeedSyncCreate(BaseModel):
     limit_per_feed: int = 10
 
 
+class AssimilationEvaluateCreate(BaseModel):
+    source_refs: list[str] = Field(default_factory=list)
+    question: str = ""
+    auto_stage: bool = False
+
+
 class TreeSearchCreate(BaseModel):
     program_id: str
     question: str

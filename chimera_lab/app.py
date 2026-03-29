@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from chimera_lab.config import Settings, load_settings
 from chimera_lab.db import Storage
 from chimera_lab.schemas import (
+    AssimilationEvaluateCreate,
     Artifact,
     AutoresearchCreate,
     BudgetTransferCreate,
@@ -64,6 +65,7 @@ from chimera_lab.schemas import (
     VivariumWorldCreate,
 )
 from chimera_lab.services.analytics_mirror import AnalyticsMirror
+from chimera_lab.services.assimilation_service import AssimilationService
 from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.channel_gateway import ChannelGateway
 from chimera_lab.services.company_layer import AutonomousCompany
@@ -103,6 +105,7 @@ class AppServices:
     memory_tiers: MemoryTierOrchestrator
     scout_service: ScoutService
     scout_feed_registry: ScoutFeedRegistry
+    assimilation_service: AssimilationService
     skill_registry: SkillRegistry
     policy_service: PolicyService
     review_tribunal: ReviewTribunal
@@ -135,12 +138,13 @@ def create_app() -> FastAPI:
     sandbox_runner = SandboxRunner(settings.sandbox_mode, settings.data_dir / "worktrees")
     scout_service = ScoutService(settings, storage, artifact_store)
     scout_feed_registry = ScoutFeedRegistry()
+    research_evolution_lab = ResearchEvolutionLab(settings, artifact_store)
+    assimilation_service = AssimilationService(artifact_store, research_evolution_lab)
     model_router = ModelRouter()
     frontier_adapter = FrontierAdapter(settings, artifact_store)
     local_worker = LocalWorker(settings, artifact_store, sandbox_runner, skill_registry=skill_registry)
     mutation_guardrails = MutationGuardrails(settings)
     memory_tiers = MemoryTierOrchestrator()
-    research_evolution_lab = ResearchEvolutionLab(settings, artifact_store)
     publication_service = PublicationService(settings, storage, analytics_mirror=analytics_mirror)
     git_safety = GitSafetyService(settings, artifact_store)
     runtime_guard = RuntimeGuard(settings, artifact_store, git_safety=git_safety)
@@ -154,6 +158,7 @@ def create_app() -> FastAPI:
         memory_tiers=memory_tiers,
         scout_service=scout_service,
         scout_feed_registry=scout_feed_registry,
+        assimilation_service=assimilation_service,
         skill_registry=skill_registry,
         policy_service=PolicyService(storage),
         review_tribunal=ReviewTribunal(storage, artifact_store),
@@ -169,6 +174,7 @@ def create_app() -> FastAPI:
             scout_service=scout_service,
             memory_tiers=memory_tiers,
             research_evolution_lab=research_evolution_lab,
+            assimilation_service=assimilation_service,
         ),
         research_organs=ResearchOrgans(storage, artifact_store, model_router, scout_service=scout_service),
         research_evolution_lab=research_evolution_lab,
@@ -568,6 +574,14 @@ def create_app() -> FastAPI:
             created_by="scout_feeds",
         )
         return [ScoutCandidate.model_validate(item) for item in synced]
+
+    @app.post("/research/assimilation/evaluate", response_model=list[dict[str, Any]])
+    def evaluate_assimilation(payload: AssimilationEvaluateCreate, services: AppServices = Depends(get_services)) -> list[dict[str, Any]]:
+        return services.assimilation_service.evaluate_source_refs(
+            payload.source_refs,
+            question=payload.question,
+            auto_stage=payload.auto_stage,
+        )
 
     @app.post("/channels/inbound", response_model=Artifact)
     def channel_inbound(payload: ChannelMessage, services: AppServices = Depends(get_services)) -> Artifact:

@@ -176,6 +176,9 @@ def test_research_ingest_run_records_source_trace_bundle(tmp_path: Path) -> None
     assert refreshed["input_payload"]["scout_query_plan"]["compact_query"]
     assert refreshed["input_payload"]["scout_query_plan"]["expanded_query"]
     assert refreshed["input_payload"]["source_trace_bundle"]["query_plan"]["compact_query"]
+    assert refreshed["input_payload"]["source_quality_gate"]["decision"] in {"accept", "expand", "rewrite"}
+    assert isinstance(refreshed["input_payload"]["absorption_candidates"], list)
+    assert refreshed["input_payload"]["absorption_candidates"]
 
     artifacts = client.get("/artifacts?limit=50").json()
     bundles = [item for item in artifacts if item["type"] == "source_trace_bundle" and run["id"] in item["source_refs"]]

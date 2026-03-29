@@ -4,6 +4,7 @@ from typing import Any
 
 from chimera_lab.db import Storage
 from chimera_lab.config import Settings
+from chimera_lab.services.assimilation_service import AssimilationService
 from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.memory_tiers import MemoryTierOrchestrator
 from chimera_lab.services.research_evolution import ResearchEvolutionLab
@@ -22,6 +23,7 @@ class RunAutomation:
         scout_service: ScoutService,
         memory_tiers: MemoryTierOrchestrator,
         research_evolution_lab: ResearchEvolutionLab,
+        assimilation_service: AssimilationService,
     ) -> None:
         self.settings = settings
         self.storage = storage
@@ -30,6 +32,7 @@ class RunAutomation:
         self.scout_service = scout_service
         self.memory_tiers = memory_tiers
         self.research_evolution_lab = research_evolution_lab
+        self.assimilation_service = assimilation_service
         self.referee_loop = RefereeLoop()
 
     def prepare_run(self, run: dict) -> dict:
@@ -66,9 +69,16 @@ class RunAutomation:
                     source_refs=[item["source_ref"]],
                     metadata={"title": item.get("title", ""), "feed_name": item.get("feed_name", "")},
                 )
+            source_candidates = list(feed_items) + list(live_sources)
+            source_quality_gate = self.assimilation_service.grade_source_bundle(query, source_candidates)
+            absorption_candidates = self.assimilation_service.evaluate_candidates(source_candidates[:8], question=query, auto_stage=False)
             payload["feed_sync_refs"] = synced_refs
             payload["live_sources"] = [item["source_ref"] for item in live_sources]
             payload["scout_query_plan"] = scout_query_plan
+            payload["source_quality_gate"] = source_quality_gate
+            payload["absorption_candidates"] = absorption_candidates[:5]
+            if source_quality_gate["decision"] != "accept":
+                payload["scout_rewrite_hint"] = source_quality_gate["rewrite_hint"]
             payload["memory_context"] = self.memory_tiers.retrieve(query, tier="working", limit=5)
             payload["source_trace_required"] = True
             payload["source_trace_bundle"] = {
@@ -76,8 +86,9 @@ class RunAutomation:
                 "query_plan": scout_query_plan,
                 "feed_sync_refs": synced_refs[:10],
                 "live_sources": payload["live_sources"][:10],
+                "source_quality_gate": source_quality_gate,
             }
-            auto_organs.extend(["scout_feeds", "live_scout", "memory_tiers"])
+            auto_organs.extend(["scout_feeds", "live_scout", "memory_tiers", "source_quality_gate", "assimilation_advisor"])
 
         elif run["task_type"] == "plan":
             branch_factor = int(payload.get("tree_branch_factor", self.settings.tree_search_branch_factor))
