@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 import re
 from html import unescape
+from typing import Any
+from urllib.parse import urlparse
 from xml.etree import ElementTree
 
 import httpx
@@ -277,15 +279,75 @@ class ScoutService:
             if current is None or self._candidate_rank(query, item) > self._candidate_rank(query, current):
                 deduped[item["source_ref"]] = item
         ranked = sorted(deduped.values(), key=lambda item: (-self._candidate_rank(query, item), item["source_ref"]))
-        return ranked[:limit]
+        return self._diversify_ranked_results(query, ranked, limit)
 
     def _candidate_rank(self, query: str, item: dict) -> float:
         text = " ".join([item.get("source_ref", ""), item.get("summary", "")]).lower()
         relevance = self._query_relevance(text, query)
         source_bonus = {"github": 0.14, "paper": 0.12, "web": 0.06}.get(item.get("source_type"), 0.04)
+        feedback_bonus = self._feedback_signal(item.get("source_ref", ""))
         score = (float(item.get("novelty_score", 0.5)) * 0.55) + (float(item.get("trust_score", 0.5)) * 0.25)
-        score += source_bonus + (relevance * 0.35) - self._noise_penalty(text)
+        score += source_bonus + (relevance * 0.35) + feedback_bonus - self._noise_penalty(text)
         return round(score, 4)
+
+    def _feedback_signal(self, source_ref: str) -> float:
+        if not source_ref:
+            return 0.0
+        feedback = self.storage.get_scout_feedback(source_ref)
+        if not feedback:
+            return 0.0
+        referenced = float(feedback.get("referenced_count", 0))
+        actionable = float(feedback.get("actionable_count", 0))
+        staged = float(feedback.get("staged_count", 0))
+        mutation_success = float(feedback.get("mutation_success_count", 0))
+        mutation_failure = float(feedback.get("mutation_failure_count", 0))
+        preflight_failure = float(feedback.get("preflight_failure_count", 0))
+        promotion = float(feedback.get("promotion_count", 0))
+        noisy = float(feedback.get("noisy_count", 0))
+        positive = (
+            min(0.05, referenced * 0.008)
+            + min(0.08, actionable * 0.02)
+            + min(0.12, staged * 0.04)
+            + min(0.14, mutation_success * 0.07)
+            + min(0.18, promotion * 0.18)
+        )
+        negative = (
+            min(0.15, mutation_failure * 0.04)
+            + min(0.08, preflight_failure * 0.03)
+            + min(0.12, noisy * 0.03)
+        )
+        return round(max(-0.25, min(0.35, positive - negative)), 4)
+
+    def _diversify_ranked_results(self, query: str, ranked: list[dict], limit: int) -> list[dict]:
+        selected: list[dict] = []
+        pool = ranked[:]
+        selected_domains: dict[str, int] = {}
+        selected_types: dict[str, int] = {}
+        while pool and len(selected) < limit:
+            best_index = 0
+            best_score = float("-inf")
+            for index, item in enumerate(pool):
+                score = self._candidate_rank(query, item)
+                domain = self._source_domain(item.get("source_ref", ""))
+                source_type = str(item.get("source_type", "web"))
+                score -= selected_domains.get(domain, 0) * 0.06
+                score -= selected_types.get(source_type, 0) * 0.03
+                if score > best_score:
+                    best_score = score
+                    best_index = index
+            chosen = pool.pop(best_index)
+            selected.append(chosen)
+            domain = self._source_domain(chosen.get("source_ref", ""))
+            source_type = str(chosen.get("source_type", "web"))
+            selected_domains[domain] = selected_domains.get(domain, 0) + 1
+            selected_types[source_type] = selected_types.get(source_type, 0) + 1
+        return selected
+
+    def _source_domain(self, source_ref: str) -> str:
+        try:
+            return urlparse(source_ref).netloc.lower() or "unknown"
+        except ValueError:
+            return "unknown"
 
     def _query_relevance(self, text: str, query: str) -> float:
         tokens = [token for token in re.findall(r"[A-Za-z0-9_]{3,}", query.lower()) if token not in {"with", "from", "that", "this", "what", "when"}]

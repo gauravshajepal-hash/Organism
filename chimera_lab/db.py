@@ -122,6 +122,19 @@ class Storage:
                     license TEXT,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS scout_candidate_feedback (
+                    source_ref TEXT PRIMARY KEY,
+                    referenced_count INTEGER NOT NULL,
+                    actionable_count INTEGER NOT NULL,
+                    staged_count INTEGER NOT NULL,
+                    mutation_success_count INTEGER NOT NULL,
+                    mutation_failure_count INTEGER NOT NULL,
+                    preflight_failure_count INTEGER NOT NULL,
+                    promotion_count INTEGER NOT NULL,
+                    noisy_count INTEGER NOT NULL,
+                    last_event TEXT,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS review_verdicts (
                     id TEXT PRIMARY KEY,
                     subject_id TEXT NOT NULL,
@@ -649,6 +662,101 @@ class Storage:
 
     def list_scout_candidates(self) -> list[dict[str, Any]]:
         return self._select_many("SELECT * FROM scout_candidates ORDER BY created_at DESC")
+
+    def get_scout_feedback(self, source_ref: str) -> dict[str, Any] | None:
+        return self._select_one("SELECT * FROM scout_candidate_feedback WHERE source_ref = ?", (source_ref,))
+
+    def record_scout_feedback(
+        self,
+        source_ref: str,
+        *,
+        referenced_count: int = 0,
+        actionable_count: int = 0,
+        staged_count: int = 0,
+        mutation_success_count: int = 0,
+        mutation_failure_count: int = 0,
+        preflight_failure_count: int = 0,
+        promotion_count: int = 0,
+        noisy_count: int = 0,
+        last_event: str | None = None,
+    ) -> dict[str, Any]:
+        existing = self.get_scout_feedback(source_ref)
+        now = utc_now()
+        if existing is None:
+            row = {
+                "source_ref": source_ref,
+                "referenced_count": max(0, referenced_count),
+                "actionable_count": max(0, actionable_count),
+                "staged_count": max(0, staged_count),
+                "mutation_success_count": max(0, mutation_success_count),
+                "mutation_failure_count": max(0, mutation_failure_count),
+                "preflight_failure_count": max(0, preflight_failure_count),
+                "promotion_count": max(0, promotion_count),
+                "noisy_count": max(0, noisy_count),
+                "last_event": last_event,
+                "updated_at": now,
+            }
+            with self.connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO scout_candidate_feedback (
+                        source_ref, referenced_count, actionable_count, staged_count,
+                        mutation_success_count, mutation_failure_count, preflight_failure_count,
+                        promotion_count, noisy_count, last_event, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        row["source_ref"],
+                        row["referenced_count"],
+                        row["actionable_count"],
+                        row["staged_count"],
+                        row["mutation_success_count"],
+                        row["mutation_failure_count"],
+                        row["preflight_failure_count"],
+                        row["promotion_count"],
+                        row["noisy_count"],
+                        row["last_event"],
+                        row["updated_at"],
+                    ),
+                )
+            return row
+
+        updates = {
+            "referenced_count": int(existing.get("referenced_count", 0)) + max(0, referenced_count),
+            "actionable_count": int(existing.get("actionable_count", 0)) + max(0, actionable_count),
+            "staged_count": int(existing.get("staged_count", 0)) + max(0, staged_count),
+            "mutation_success_count": int(existing.get("mutation_success_count", 0)) + max(0, mutation_success_count),
+            "mutation_failure_count": int(existing.get("mutation_failure_count", 0)) + max(0, mutation_failure_count),
+            "preflight_failure_count": int(existing.get("preflight_failure_count", 0)) + max(0, preflight_failure_count),
+            "promotion_count": int(existing.get("promotion_count", 0)) + max(0, promotion_count),
+            "noisy_count": int(existing.get("noisy_count", 0)) + max(0, noisy_count),
+            "last_event": last_event or existing.get("last_event"),
+            "updated_at": now,
+        }
+        with self.connection() as conn:
+            conn.execute(
+                """
+                UPDATE scout_candidate_feedback
+                SET referenced_count = ?, actionable_count = ?, staged_count = ?,
+                    mutation_success_count = ?, mutation_failure_count = ?, preflight_failure_count = ?,
+                    promotion_count = ?, noisy_count = ?, last_event = ?, updated_at = ?
+                WHERE source_ref = ?
+                """,
+                (
+                    updates["referenced_count"],
+                    updates["actionable_count"],
+                    updates["staged_count"],
+                    updates["mutation_success_count"],
+                    updates["mutation_failure_count"],
+                    updates["preflight_failure_count"],
+                    updates["promotion_count"],
+                    updates["noisy_count"],
+                    updates["last_event"],
+                    updates["updated_at"],
+                    source_ref,
+                ),
+            )
+        return self.get_scout_feedback(source_ref) or {"source_ref": source_ref, **updates}
 
     def create_review_verdict(self, subject_id: str, reviewer_type: str, decision: str, notes: str, confidence: float, model_tier: str | None = None) -> dict[str, Any]:
         row = {
