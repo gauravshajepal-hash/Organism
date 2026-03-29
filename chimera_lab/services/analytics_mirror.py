@@ -122,20 +122,14 @@ class AnalyticsMirror:
             return
         last_error: Exception | None = None
         for attempt in range(4):
-            conn = duckdb.connect(str(self.duckdb_path))
             try:
-                sql_path = str(jsonl_path).replace("'", "''")
-                conn.execute(f"CREATE OR REPLACE TABLE {self._safe_identifier(table)} AS SELECT * FROM read_json_auto('{sql_path}')")
-                parquet_sql_path = str(parquet_path).replace("'", "''")
-                conn.execute(f"COPY {self._safe_identifier(table)} TO '{parquet_sql_path}' (FORMAT PARQUET)")
+                self._mirror_table_once(table, jsonl_path, parquet_path)
                 return
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
                 if attempt >= 3 or not self._is_retryable_duckdb_error(exc):
                     raise
                 time.sleep(0.05 * (attempt + 1))
-            finally:
-                conn.close()
         if last_error is not None:
             raise last_error
 
@@ -184,3 +178,16 @@ class AnalyticsMirror:
     def _is_retryable_duckdb_error(self, exc: Exception) -> bool:
         message = str(exc).lower()
         return "write-write conflict" in message or "transactioncontext error" in message or "catalog" in message
+
+    def _mirror_table_once(self, table: str, jsonl_path: Path, parquet_path: Path) -> None:
+        duckdb = self._duckdb
+        if duckdb is None:
+            return
+        conn = duckdb.connect(str(self.duckdb_path))
+        try:
+            sql_path = str(jsonl_path).replace("'", "''")
+            conn.execute(f"CREATE OR REPLACE TABLE {self._safe_identifier(table)} AS SELECT * FROM read_json_auto('{sql_path}')")
+            parquet_sql_path = str(parquet_path).replace("'", "''")
+            conn.execute(f"COPY {self._safe_identifier(table)} TO '{parquet_sql_path}' (FORMAT PARQUET)")
+        finally:
+            conn.close()
