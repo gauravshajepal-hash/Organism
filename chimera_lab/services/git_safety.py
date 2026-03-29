@@ -57,7 +57,7 @@ class GitSafetyService:
         return payload
 
     def ensure_repository(self, remote_url: str | None = None, branch: str | None = None) -> dict[str, Any]:
-        remote_url = (remote_url or self.settings.git_remote_url).strip()
+        remote_url = self._normalize_remote_url((remote_url or self.settings.git_remote_url).strip())
         branch = (branch or self.settings.git_branch).strip()
         self.repo_root.mkdir(parents=True, exist_ok=True)
         if not (self.repo_root / ".git").exists():
@@ -66,7 +66,7 @@ class GitSafetyService:
         self._ensure_identity()
         self._ensure_remote("origin", remote_url)
         if self.settings.git_mirror_remote_url:
-            self._ensure_remote(self.settings.git_mirror_remote_name, self.settings.git_mirror_remote_url)
+            self._ensure_remote(self.settings.git_mirror_remote_name, self._normalize_remote_url(self.settings.git_mirror_remote_url))
         result = {"status": "ready", **self.status()}
         self._record("git_repository_ready", result)
         return result
@@ -240,6 +240,7 @@ class GitSafetyService:
         return any(token in text for token in ["fetch first", "non-fast-forward", "rejected"])
 
     def _ensure_remote(self, name: str, remote_url: str) -> None:
+        remote_url = self._normalize_remote_url(remote_url)
         existing_remote = self._git_output(["remote", "get-url", name])
         if existing_remote:
             if existing_remote != remote_url:
@@ -552,3 +553,17 @@ class GitSafetyService:
         }
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.state_path.write_text(json.dumps(state, ensure_ascii=True, indent=2), encoding="utf-8")
+
+    def _normalize_remote_url(self, remote_url: str) -> str:
+        if not remote_url:
+            return remote_url
+        lowered = remote_url.lower()
+        if "://" in remote_url or remote_url.startswith("git@"):
+            return remote_url
+        candidate = Path(remote_url)
+        if candidate.exists() or (len(remote_url) > 2 and remote_url[1] == ":" and remote_url[0].isalpha()):
+            try:
+                return candidate.resolve().as_posix()
+            except Exception:  # noqa: BLE001
+                return candidate.as_posix()
+        return remote_url
