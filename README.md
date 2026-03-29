@@ -126,6 +126,8 @@ These systems shaped the architecture. This repository is its own implementation
 - git repository bootstrap and checkpoint endpoints
 - automatic checkpoint on public export
 - automatic checkpoint on mutation promotion
+- optional mirror-remote push for backup redundancy
+- timestamped backup tags for immutable restore points
 - runtime event journal
 - persisted crash reports and last-session recovery state
 
@@ -246,9 +248,14 @@ It deploys the `docs/` directory as a static site on pushes to `main` or `master
 - `CHIMERA_SKILLS_DIR`: markdown skill directory
 - `CHIMERA_GIT_ROOT`: git working tree root, defaults to the current repo
 - `CHIMERA_GIT_REMOTE_URL`: remote repository URL, defaults to `https://github.com/gauravshajepal-hash/Organism.git`
+- `CHIMERA_GIT_MIRROR_REMOTE_URL`: optional second remote for redundant backup pushes
+- `CHIMERA_GIT_MIRROR_REMOTE_NAME`: remote name for the mirror, defaults to `mirror`
 - `CHIMERA_GIT_BRANCH`: push branch, defaults to `main`
 - `CHIMERA_GIT_AUTOPUSH`: enable automatic git push checkpoints
 - `CHIMERA_GIT_SECRET_SCAN`: block checkpoints when staged files or staged diffs look secret-bearing
+- `CHIMERA_GIT_BACKUP_TAGS_ENABLED`: create timestamped backup tags on successful backup pushes
+- `CHIMERA_GIT_BACKUP_TAG_PREFIX`: prefix for backup tags, defaults to `backup`
+- `CHIMERA_GIT_BACKUP_INTERVAL_SECONDS`: force a backup verification push/tag when the last recorded backup is stale
 - `CHIMERA_LOCAL_RETRY_LIMIT`: retry-command fan-out for local runs
 - `CHIMERA_SCOUT_SEEDS`: comma-separated scout seed URLs
 - `CHIMERA_MUTATION_MAX_FILES`: maximum edited files before quarantine
@@ -271,6 +278,8 @@ It deploys the `docs/` directory as a static site on pushes to `main` or `master
 - runtime events and crashes are journaled under `data/runtime`
 - the next startup can inspect the latest crash and recent events
 - important outward-facing checkpoints can auto-commit and push
+- checkpoints can push to both `origin` and an optional mirror remote
+- successful backup pushes can stamp immutable timestamped tags
 - secret-bearing files and obvious staged credentials are blocked before checkpoint commit/push
 - public export is outward-only and redacted
 

@@ -92,6 +92,12 @@ The organism also checkpoints automatically on:
 - mutation promotion
 - public export
 - recorded crashes where a push attempt is possible
+- supervisor cycle and objective boundaries when enabled
+
+Inspect backup state:
+
+- `GET /ops/git/status`
+- `GET /ops/git/backup-state`
 
 Checkpoint hardening:
 
@@ -99,6 +105,21 @@ Checkpoint hardening:
 - checkpoints are blocked if staged files look secret-bearing
 - checkpoints are blocked if staged diffs contain obvious API-key or bearer-token patterns
 - use shell or OS-level environment variables for live keys, not tracked repo files
+
+Redundancy hardening:
+
+- set `CHIMERA_GIT_MIRROR_REMOTE_URL` to push backups to a second remote
+- optional mirror remote name is `CHIMERA_GIT_MIRROR_REMOTE_NAME`, default `mirror`
+- set `CHIMERA_GIT_BACKUP_TAGS_ENABLED=1` to stamp timestamped backup tags on successful pushes
+- `CHIMERA_GIT_BACKUP_INTERVAL_SECONDS` forces a verify-and-tag backup when the last recorded backup becomes stale
+
+Typical PowerShell setup:
+
+```powershell
+$env:CHIMERA_GIT_REMOTE_URL="https://github.com/gauravshajepal-hash/Organism.git"
+$env:CHIMERA_GIT_MIRROR_REMOTE_URL="https://github.com/gauravshajepal-hash/Organism-mirror.git"
+$env:CHIMERA_GIT_BACKUP_TAGS_ENABLED="1"
+```
 
 ## Failure Handling
 
