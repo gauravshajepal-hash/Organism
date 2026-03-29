@@ -114,6 +114,38 @@ class GitSafetyService:
         self._record("git_checkpoint", result)
         return result
 
+    def revert_commit(self, commit_hash: str, reason: str, push: bool | None = None) -> dict[str, Any]:
+        push = self.settings.git_auto_push if push is None else push
+        if not (self.repo_root / ".git").exists():
+            result = {"status": "skipped", "reason": reason, "detail": "repo_not_initialized", **self.status()}
+            self._record("git_revert", result)
+            return result
+        self._ensure_identity()
+        revert = self._git(["revert", "--no-edit", commit_hash], check=False)
+        result: dict[str, Any] = {
+            "status": "ok" if revert.returncode == 0 else "revert_failed",
+            "reason": reason,
+            "target_commit": commit_hash,
+            "stdout": revert.stdout.strip(),
+            "stderr": revert.stderr.strip(),
+            **self.status(),
+        }
+        if revert.returncode == 0:
+            result["revert_commit"] = self._git_output(["rev-parse", "--short", "HEAD"])
+            if push:
+                remote = self._git_output(["remote", "get-url", "origin"])
+                if remote:
+                    pushed = self._git(["push", "-u", "origin", self.settings.git_branch], check=False)
+                    result["push_result"] = {
+                        "returncode": pushed.returncode,
+                        "stdout": pushed.stdout.strip(),
+                        "stderr": pushed.stderr.strip(),
+                    }
+        else:
+            self._git(["revert", "--abort"], check=False)
+        self._record("git_revert", result)
+        return result
+
     def _record(self, artifact_type: str, payload: dict[str, Any]) -> None:
         if self.artifact_store is None:
             return

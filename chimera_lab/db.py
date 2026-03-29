@@ -178,6 +178,36 @@ class Storage:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS objective_queue (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    objective TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    priority TEXT NOT NULL,
+                    metadata TEXT NOT NULL,
+                    last_run_at TEXT,
+                    next_run_after TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS mutation_rollouts (
+                    id TEXT PRIMARY KEY,
+                    candidate_run_id TEXT NOT NULL UNIQUE,
+                    parent_run_id TEXT NOT NULL,
+                    promotion_id TEXT,
+                    status TEXT NOT NULL,
+                    risk_class TEXT NOT NULL,
+                    metadata TEXT NOT NULL,
+                    commit_before TEXT,
+                    commit_after TEXT,
+                    rollback_commit TEXT,
+                    rollback_reason TEXT,
+                    stable_cycles INTEGER NOT NULL,
+                    last_canary_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self._ensure_column(conn, "review_verdicts", "model_tier", "TEXT")
@@ -670,6 +700,183 @@ class Storage:
 
     def list_policy_decisions(self) -> list[dict[str, Any]]:
         return self._select_many("SELECT * FROM policy_decisions ORDER BY timestamp DESC")
+
+    def enqueue_objective(
+        self,
+        kind: str,
+        title: str,
+        objective: str,
+        priority: str = "normal",
+        metadata: dict[str, Any] | None = None,
+        status: str = "pending",
+        next_run_after: str | None = None,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        row = {
+            "id": new_id("objective"),
+            "kind": kind,
+            "title": title,
+            "objective": objective,
+            "status": status,
+            "priority": priority,
+            "metadata": metadata or {},
+            "last_run_at": None,
+            "next_run_after": next_run_after,
+            "created_at": now,
+            "updated_at": now,
+        }
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO objective_queue (
+                    id, kind, title, objective, status, priority, metadata, last_run_at,
+                    next_run_after, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"],
+                    row["kind"],
+                    row["title"],
+                    row["objective"],
+                    row["status"],
+                    row["priority"],
+                    _dump(row["metadata"]),
+                    row["last_run_at"],
+                    row["next_run_after"],
+                    row["created_at"],
+                    row["updated_at"],
+                ),
+            )
+        return row
+
+    def list_objectives(self, status: str | None = None) -> list[dict[str, Any]]:
+        if status:
+            return self._select_many("SELECT * FROM objective_queue WHERE status = ? ORDER BY created_at DESC", (status,))
+        return self._select_many("SELECT * FROM objective_queue ORDER BY created_at DESC")
+
+    def get_objective(self, objective_id: str) -> dict[str, Any] | None:
+        return self._select_one("SELECT * FROM objective_queue WHERE id = ?", (objective_id,))
+
+    def find_objective_by_metadata(self, key: str, value: str, status: str | None = None) -> dict[str, Any] | None:
+        candidates = self.list_objectives(status=status)
+        for candidate in candidates:
+            metadata = candidate.get("metadata") or {}
+            if str(metadata.get(key, "")) == value:
+                return candidate
+        return None
+
+    def next_due_objectives(self, limit: int = 1) -> list[dict[str, Any]]:
+        candidates = [
+            item
+            for item in self.list_objectives(status="pending")
+            if not item.get("next_run_after") or str(item["next_run_after"]) <= utc_now()
+        ]
+        priority_order = {"critical": 0, "high": 1, "normal": 2, "low": 3}
+        candidates.sort(key=lambda item: (priority_order.get(str(item.get("priority", "normal")).lower(), 9), item["created_at"]))
+        return candidates[: max(1, limit)]
+
+    def update_objective(self, objective_id: str, **updates: Any) -> dict[str, Any]:
+        updates["updated_at"] = utc_now()
+        pairs = []
+        values = []
+        for key, value in updates.items():
+            if key == "metadata":
+                value = _dump(value)
+            pairs.append(f"{key} = ?")
+            values.append(value)
+        values.append(objective_id)
+        with self.connection() as conn:
+            conn.execute(f"UPDATE objective_queue SET {', '.join(pairs)} WHERE id = ?", values)
+        updated = self.get_objective(objective_id)
+        if updated is None:
+            raise KeyError(objective_id)
+        return updated
+
+    def create_mutation_rollout(
+        self,
+        candidate_run_id: str,
+        parent_run_id: str,
+        status: str,
+        risk_class: str,
+        metadata: dict[str, Any] | None = None,
+        promotion_id: str | None = None,
+        commit_before: str | None = None,
+        commit_after: str | None = None,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        row = {
+            "id": new_id("rollout"),
+            "candidate_run_id": candidate_run_id,
+            "parent_run_id": parent_run_id,
+            "promotion_id": promotion_id,
+            "status": status,
+            "risk_class": risk_class,
+            "metadata": metadata or {},
+            "commit_before": commit_before,
+            "commit_after": commit_after,
+            "rollback_commit": None,
+            "rollback_reason": None,
+            "stable_cycles": 0,
+            "last_canary_at": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO mutation_rollouts (
+                    id, candidate_run_id, parent_run_id, promotion_id, status, risk_class,
+                    metadata, commit_before, commit_after, rollback_commit, rollback_reason,
+                    stable_cycles, last_canary_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"],
+                    row["candidate_run_id"],
+                    row["parent_run_id"],
+                    row["promotion_id"],
+                    row["status"],
+                    row["risk_class"],
+                    _dump(row["metadata"]),
+                    row["commit_before"],
+                    row["commit_after"],
+                    row["rollback_commit"],
+                    row["rollback_reason"],
+                    row["stable_cycles"],
+                    row["last_canary_at"],
+                    row["created_at"],
+                    row["updated_at"],
+                ),
+            )
+        return row
+
+    def get_mutation_rollout(self, rollout_id: str) -> dict[str, Any] | None:
+        return self._select_one("SELECT * FROM mutation_rollouts WHERE id = ?", (rollout_id,))
+
+    def get_mutation_rollout_by_candidate(self, candidate_run_id: str) -> dict[str, Any] | None:
+        return self._select_one("SELECT * FROM mutation_rollouts WHERE candidate_run_id = ?", (candidate_run_id,))
+
+    def list_mutation_rollouts(self, status: str | None = None) -> list[dict[str, Any]]:
+        if status:
+            return self._select_many("SELECT * FROM mutation_rollouts WHERE status = ? ORDER BY created_at DESC", (status,))
+        return self._select_many("SELECT * FROM mutation_rollouts ORDER BY created_at DESC")
+
+    def update_mutation_rollout(self, rollout_id: str, **updates: Any) -> dict[str, Any]:
+        updates["updated_at"] = utc_now()
+        pairs = []
+        values = []
+        for key, value in updates.items():
+            if key == "metadata":
+                value = _dump(value)
+            pairs.append(f"{key} = ?")
+            values.append(value)
+        values.append(rollout_id)
+        with self.connection() as conn:
+            conn.execute(f"UPDATE mutation_rollouts SET {', '.join(pairs)} WHERE id = ?", values)
+        updated = self.get_mutation_rollout(rollout_id)
+        if updated is None:
+            raise KeyError(rollout_id)
+        return updated
 
     def _select_one(self, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
         with self.connection() as conn:

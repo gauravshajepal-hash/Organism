@@ -239,6 +239,47 @@ class MutationPromotion(BaseModel):
     created_at: datetime
 
 
+class ObjectiveCreate(BaseModel):
+    kind: str
+    title: str
+    objective: str
+    priority: str = "normal"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    next_run_after: datetime | None = None
+
+
+class ObjectiveQueueItem(BaseModel):
+    id: str
+    kind: str
+    title: str
+    objective: str
+    status: str
+    priority: str
+    metadata: dict[str, Any]
+    last_run_at: datetime | None = None
+    next_run_after: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MutationRollout(BaseModel):
+    id: str
+    candidate_run_id: str
+    parent_run_id: str
+    promotion_id: str | None = None
+    status: str
+    risk_class: str
+    metadata: dict[str, Any]
+    commit_before: str | None = None
+    commit_after: str | None = None
+    rollback_commit: str | None = None
+    rollback_reason: str | None = None
+    stable_cycles: int
+    last_canary_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class VivariumWorldCreate(BaseModel):
     name: str
     premise: str

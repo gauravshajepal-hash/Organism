@@ -35,8 +35,11 @@ from chimera_lab.schemas import (
     MetaImprovementExecuteCreate,
     Mission,
     MissionCreate,
+    MutationRollout,
     PolicyDecision,
     PolicyDecisionCreate,
+    ObjectiveCreate,
+    ObjectiveQueueItem,
     ProductAssetCreate,
     Program,
     ProgramCreate,
@@ -70,8 +73,10 @@ from chimera_lab.services.analytics_mirror import AnalyticsMirror
 from chimera_lab.services.assimilation_service import AssimilationService
 from chimera_lab.services.arxiv_scheduler import ArxivScheduler
 from chimera_lab.services.artifact_store import ArtifactStore
+from chimera_lab.services.autonomy_supervisor import AutonomySupervisor
 from chimera_lab.services.channel_gateway import ChannelGateway
 from chimera_lab.services.company_layer import AutonomousCompany
+from chimera_lab.services.evolution_rollout import EvolutionRolloutManager
 from chimera_lab.services.frontier_adapter import FrontierAdapter
 from chimera_lab.services.git_safety import GitSafetyService
 from chimera_lab.services.local_worker import LocalWorker
@@ -91,6 +96,7 @@ from chimera_lab.services.research_organs import ResearchOrgans
 from chimera_lab.services.review_tribunal import ReviewTribunal
 from chimera_lab.services.runtime_guard import RuntimeGuard
 from chimera_lab.services.run_automation import RunAutomation
+from chimera_lab.services.run_executor import RunExecutor
 from chimera_lab.services.sandbox_runner import SandboxRunner
 from chimera_lab.services.scout_feeds import ScoutFeedRegistry
 from chimera_lab.services.scout_service import ScoutService
@@ -121,11 +127,14 @@ class AppServices:
     frontier_adapter: FrontierAdapter
     local_worker: LocalWorker
     run_automation: RunAutomation
+    run_executor: RunExecutor
     research_organs: ResearchOrgans
     research_evolution_lab: ResearchEvolutionLab
     meta_improvement_executor: MetaImprovementExecutor
     merge_registry: ModelMergeRegistry
     mutation_lab: MutationLab
+    rollout_manager: EvolutionRolloutManager
+    autonomy_supervisor: AutonomySupervisor
     vivarium: Vivarium
     social_vivarium: SocialVivarium
     company: AutonomousCompany
@@ -158,6 +167,7 @@ def create_app() -> FastAPI:
     git_safety = GitSafetyService(settings, artifact_store)
     runtime_guard = RuntimeGuard(settings, artifact_store, git_safety=git_safety)
     arxiv_scheduler = ArxivScheduler(settings, storage, artifact_store, paper_digest_service, runtime_guard)
+    review_tribunal = ReviewTribunal(storage, artifact_store)
     mutation_lab = MutationLab(
         storage,
         artifact_store,
@@ -165,7 +175,34 @@ def create_app() -> FastAPI:
         sandbox_runner=sandbox_runner,
         guardrails=mutation_guardrails,
     )
+    run_automation = RunAutomation(
+        settings,
+        storage,
+        artifact_store,
+        scout_feed_registry=scout_feed_registry,
+        scout_service=scout_service,
+        memory_tiers=memory_tiers,
+        research_evolution_lab=research_evolution_lab,
+        assimilation_service=assimilation_service,
+    )
+    run_executor = RunExecutor(
+        storage=storage,
+        artifact_store=artifact_store,
+        runtime_guard=runtime_guard,
+        run_automation=run_automation,
+        frontier_adapter=frontier_adapter,
+        local_worker=local_worker,
+    )
     meta_improvement_executor = MetaImprovementExecutor(settings, storage, artifact_store, research_evolution_lab, mutation_lab=mutation_lab)
+    rollout_manager = EvolutionRolloutManager(
+        settings=settings,
+        storage=storage,
+        artifact_store=artifact_store,
+        mutation_lab=mutation_lab,
+        review_tribunal=review_tribunal,
+        git_safety=git_safety,
+        sandbox_runner=sandbox_runner,
+    )
     services = AppServices(
         settings=settings,
         storage=storage,
@@ -181,26 +218,30 @@ def create_app() -> FastAPI:
         arxiv_scheduler=arxiv_scheduler,
         skill_registry=skill_registry,
         policy_service=PolicyService(storage),
-        review_tribunal=ReviewTribunal(storage, artifact_store),
+        review_tribunal=review_tribunal,
         channel_gateway=ChannelGateway(artifact_store),
         model_router=model_router,
         frontier_adapter=frontier_adapter,
         local_worker=local_worker,
-        run_automation=RunAutomation(
-            settings,
-            storage,
-            artifact_store,
-            scout_feed_registry=scout_feed_registry,
-            scout_service=scout_service,
-            memory_tiers=memory_tiers,
-            research_evolution_lab=research_evolution_lab,
-            assimilation_service=assimilation_service,
-        ),
+        run_automation=run_automation,
+        run_executor=run_executor,
         research_organs=ResearchOrgans(storage, artifact_store, model_router, scout_service=scout_service),
         research_evolution_lab=research_evolution_lab,
         meta_improvement_executor=meta_improvement_executor,
         merge_registry=ModelMergeRegistry(),
         mutation_lab=mutation_lab,
+        rollout_manager=rollout_manager,
+        autonomy_supervisor=AutonomySupervisor(
+            settings=settings,
+            storage=storage,
+            artifact_store=artifact_store,
+            runtime_guard=runtime_guard,
+            arxiv_scheduler=arxiv_scheduler,
+            research_evolution_lab=research_evolution_lab,
+            meta_improvement_executor=meta_improvement_executor,
+            run_executor=run_executor,
+            rollout_manager=rollout_manager,
+        ),
         vivarium=Vivarium(storage, artifact_store),
         social_vivarium=SocialVivarium(),
         company=AutonomousCompany(owner_name="human", starting_cash=500.0),
@@ -215,6 +256,8 @@ def create_app() -> FastAPI:
     services.runtime_guard.begin_session()
     if services.settings.background_ingestion_enabled:
         services.arxiv_scheduler.start()
+    if services.settings.supervisor_enabled:
+        services.autonomy_supervisor.start()
 
     static_dir = Path(__file__).resolve().parent / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -234,6 +277,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("shutdown")
     def close_runtime_session() -> None:
+        services.autonomy_supervisor.stop()
         services.arxiv_scheduler.stop()
         services.runtime_guard.finish_session()
 
@@ -272,6 +316,22 @@ def create_app() -> FastAPI:
     @app.post("/ops/arxiv/run-once", response_model=dict[str, Any])
     def arxiv_run_once(services: AppServices = Depends(get_services)) -> dict[str, Any]:
         return services.arxiv_scheduler.run_once(force=True)
+
+    @app.get("/ops/supervisor/status", response_model=dict[str, Any])
+    def supervisor_status(services: AppServices = Depends(get_services)) -> dict[str, Any]:
+        return services.autonomy_supervisor.snapshot()
+
+    @app.post("/ops/supervisor/start", response_model=dict[str, Any])
+    def supervisor_start(services: AppServices = Depends(get_services)) -> dict[str, Any]:
+        return services.autonomy_supervisor.start()
+
+    @app.post("/ops/supervisor/stop", response_model=dict[str, Any])
+    def supervisor_stop(services: AppServices = Depends(get_services)) -> dict[str, Any]:
+        return services.autonomy_supervisor.stop()
+
+    @app.post("/ops/supervisor/run-once", response_model=dict[str, Any])
+    def supervisor_run_once(services: AppServices = Depends(get_services)) -> dict[str, Any]:
+        return services.autonomy_supervisor.run_once()
 
     @app.get("/ops/git/status", response_model=dict[str, Any])
     def git_status(services: AppServices = Depends(get_services)) -> dict[str, Any]:
@@ -380,72 +440,11 @@ def create_app() -> FastAPI:
 
     @app.post("/runs/{run_id}/start", response_model=TaskRun)
     def start_run(run_id: str, services: AppServices = Depends(get_services)) -> TaskRun:
-        run = services.storage.get_task_run(run_id)
-        if not run:
-            raise HTTPException(status_code=404, detail="Run not found")
-        program = services.storage.get_program(run["program_id"])
-        mission = services.storage.get_mission(program["mission_id"]) if program else None
-        services.runtime_guard.record_event(
-            "run_started",
-            {"run_id": run_id, "task_type": run["task_type"], "worker_tier": run["worker_tier"]},
-        )
-
         try:
-            run = services.run_automation.prepare_run(run)
-            services.storage.update_task_run(run_id, status="running")
-            if run["worker_tier"] in {"frontier_planner", "frontier_auditor"}:
-                reviewer_type = "planner" if run["worker_tier"] == "frontier_planner" else "auditor"
-                artifact = services.frontier_adapter.request(run, mission, program, reviewer_type)
-                if artifact["type"] == "frontier_response":
-                    updated = services.storage.update_task_run(
-                        run_id,
-                        status="completed",
-                        result_summary=f"Automated frontier {reviewer_type} completed via artifact {artifact['id']}.",
-                    )
-                else:
-                    updated = services.storage.update_task_run(
-                        run_id,
-                        status="awaiting_frontier_input",
-                        result_summary=f"Frontier {reviewer_type} prompt prepared as artifact {artifact['id']}.",
-                    )
-                services.run_automation.post_run(updated)
-                services.runtime_guard.record_event("run_completed", {"run_id": run_id, "status": updated["status"]})
-                return TaskRun.model_validate(updated)
-
-            result = services.local_worker.execute(mission, program, run)
-            services.artifact_store.create(
-                "run_result",
-                {
-                    "run_id": run_id,
-                    "summary": result["summary"],
-                    "artifacts": result["artifacts"],
-                },
-                source_refs=[run_id],
-                created_by="local_worker",
-            )
-            updated = services.storage.update_task_run(
-                run_id,
-                status="completed",
-                result_summary=result["summary"],
-            )
-            services.run_automation.post_run(updated)
-            services.runtime_guard.record_event("run_completed", {"run_id": run_id, "status": updated["status"]})
+            updated = services.run_executor.execute(run_id)
             return TaskRun.model_validate(updated)
-        except Exception as exc:  # noqa: BLE001
-            services.artifact_store.create(
-                "run_error",
-                {"run_id": run_id, "error": str(exc)},
-                source_refs=[run_id],
-                created_by="app",
-            )
-            services.runtime_guard.record_exception(
-                "run_start",
-                str(exc),
-                {"run_id": run_id, "task_type": run["task_type"]},
-                push_backup=True,
-            )
-            updated = services.storage.update_task_run(run_id, status="failed", result_summary=str(exc))
-            return TaskRun.model_validate(updated)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Run not found") from exc
 
     @app.post("/runs/{run_id}/review", response_model=ReviewVerdict)
     def review_run(run_id: str, payload: ReviewCreate, services: AppServices = Depends(get_services)) -> ReviewVerdict:
@@ -649,6 +648,22 @@ def create_app() -> FastAPI:
     def list_policy_decisions(services: AppServices = Depends(get_services)) -> list[PolicyDecision]:
         return [PolicyDecision.model_validate(item) for item in services.policy_service.list()]
 
+    @app.post("/objectives", response_model=ObjectiveQueueItem)
+    def create_objective(payload: ObjectiveCreate, services: AppServices = Depends(get_services)) -> ObjectiveQueueItem:
+        objective = services.storage.enqueue_objective(
+            kind=payload.kind,
+            title=payload.title,
+            objective=payload.objective,
+            priority=payload.priority,
+            metadata=payload.metadata,
+            next_run_after=None if payload.next_run_after is None else payload.next_run_after.isoformat(),
+        )
+        return ObjectiveQueueItem.model_validate(objective)
+
+    @app.get("/objectives", response_model=list[ObjectiveQueueItem])
+    def list_objectives(status: str | None = None, services: AppServices = Depends(get_services)) -> list[ObjectiveQueueItem]:
+        return [ObjectiveQueueItem.model_validate(item) for item in services.storage.list_objectives(status=status)]
+
     @app.post("/research/pipelines", response_model=ResearchPipeline)
     def create_research_pipeline(payload: ResearchPipelineCreate, services: AppServices = Depends(get_services)) -> ResearchPipeline:
         if not services.storage.get_program(payload.program_id):
@@ -775,6 +790,10 @@ def create_app() -> FastAPI:
     @app.get("/mutation/promotions", response_model=list[MutationPromotion])
     def list_mutation_promotions(services: AppServices = Depends(get_services)) -> list[MutationPromotion]:
         return [MutationPromotion.model_validate(item) for item in services.mutation_lab.list_promotions()]
+
+    @app.get("/mutation/rollouts", response_model=list[MutationRollout])
+    def list_mutation_rollouts(status: str | None = None, services: AppServices = Depends(get_services)) -> list[MutationRollout]:
+        return [MutationRollout.model_validate(item) for item in services.rollout_manager.list_rollouts(status=status)]
 
     @app.post("/vivarium/worlds", response_model=VivariumWorld)
     def create_vivarium_world(payload: VivariumWorldCreate, services: AppServices = Depends(get_services)) -> VivariumWorld:

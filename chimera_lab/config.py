@@ -51,6 +51,12 @@ class Settings:
     arxiv_max_results_per_query: int
     arxiv_digest_top_n: int
     arxiv_default_queries: list[str]
+    supervisor_enabled: bool
+    supervisor_poll_interval_seconds: int
+    supervisor_objective_limit: int
+    supervisor_stable_cycles_required: int
+    supervisor_auto_promote_enabled: bool
+    supervisor_default_objectives: list[str]
 
 
 def load_settings() -> Settings:
@@ -120,6 +126,24 @@ def load_settings() -> Settings:
                         "research agents memory coding loops benchmark evaluation",
                         "agent memory retrieval benchmark graph rag evaluation",
                         "self improving coding agents workflow guardrails quality gates",
+                    ]
+                ),
+            ).split(",")
+            if item.strip()
+        ],
+        supervisor_enabled=_env_flag("CHIMERA_ENABLE_SUPERVISOR", background_default),
+        supervisor_poll_interval_seconds=int(os.getenv("CHIMERA_SUPERVISOR_POLL_INTERVAL_SECONDS", "900")),
+        supervisor_objective_limit=int(os.getenv("CHIMERA_SUPERVISOR_OBJECTIVE_LIMIT", "3")),
+        supervisor_stable_cycles_required=int(os.getenv("CHIMERA_SUPERVISOR_STABLE_CYCLES_REQUIRED", "2")),
+        supervisor_auto_promote_enabled=_env_flag("CHIMERA_SUPERVISOR_AUTO_PROMOTE", True),
+        supervisor_default_objectives=[
+            item.strip()
+            for item in os.getenv(
+                "CHIMERA_SUPERVISOR_DEFAULT_OBJECTIVES",
+                ",".join(
+                    [
+                        "Discover the highest-signal upstream work for self-improving research organisms, scout ranking, memory systems, mutation safety, and one-way publication surfaces.",
+                        "Improve internal scout ranking, source quality gates, and bounded retries without expanding autonomy risk.",
                     ]
                 ),
             ).split(",")
