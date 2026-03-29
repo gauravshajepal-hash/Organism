@@ -1,6 +1,6 @@
-# Chimera Lab
+# Organism
 
-Chimera Lab is a local-first operator kernel for building a research organism.
+Organism is a local-first operator kernel for building a research organism.
 
 It combines bounded execution, artifact-first memory, live scouting, staged research workflows, mutation guardrails, promotion gates, social simulation, and a one-way public publication layer for GitHub.
 
