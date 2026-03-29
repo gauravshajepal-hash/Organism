@@ -51,6 +51,8 @@ class MutationLab:
                         "mutation_parent_command": base_run["command"],
                         "mutation_generated_by": "mutation_generator",
                         "mutation_generator_model_tier": "local_executor",
+                        "mutation_source_refs": list((base_run.get("input_payload") or {}).get("meta_improvement_source_refs") or []),
+                        "mutation_negative_memory": self._negative_patch_memory(run_id),
                     },
                 )
                 candidate_run_ids.append(candidate["id"])
@@ -139,6 +141,7 @@ class MutationLab:
             status="promoted",
             result_summary=f"Mutation promoted by {approved_by}. {reason}"[:500],
         )
+        self._record_source_feedback(self._mutation_source_refs(candidate), event="mutation_promoted", promotion_count=1)
         return promotion
 
     def _operators_for(self, strategy: str, iterations: int) -> list[str]:
@@ -151,9 +154,20 @@ class MutationLab:
 
     def _apply_and_evaluate_candidate(self, mission: dict | None, program: dict | None, candidate: dict, base_run: dict, operator: str) -> None:
         target_path = candidate.get("target_path")
-        plan = self.local_worker.plan_mutation(mission, program, base_run, operator, target_path or "")
+        source_refs = self._mutation_source_refs(candidate)
+        plan = self.local_worker.plan_mutation(mission, program, candidate, operator, target_path or "")
         applied_edits = []
         apply_errors = []
+        self.artifact_store.create(
+            "mutation_fault_localization",
+            {
+                "candidate_run_id": candidate["id"],
+                "operator": operator,
+                "fault_localization": plan.get("fault_localization", {}),
+            },
+            source_refs=[candidate["id"], *source_refs],
+            created_by="mutation_lab",
+        )
         if target_path and plan["edits"]:
             applied_edits, apply_errors = self._apply_edits(
                 Path(target_path),
@@ -174,7 +188,7 @@ class MutationLab:
                 "generated_by": (candidate.get("input_payload") or {}).get("mutation_generated_by", "mutation_generator"),
                 "generator_model_tier": (candidate.get("input_payload") or {}).get("mutation_generator_model_tier", "local_executor"),
             },
-            source_refs=[candidate["id"]],
+            source_refs=[candidate["id"], *source_refs],
             created_by="mutation_lab",
         )
         if target_path and not applied_edits:
@@ -182,6 +196,29 @@ class MutationLab:
             if apply_errors:
                 summary = f"{summary} No diff blocks applied."
             self.storage.update_task_run(candidate["id"], status="failed", result_summary=summary[:500])
+            self._record_source_feedback(source_refs, event="mutation_apply_failed", mutation_failure_count=1, noisy_count=1)
+            return
+        preflight_results = self._run_preflight(candidate, plan, applied_edits)
+        self.artifact_store.create(
+            "mutation_preflight",
+            {
+                "candidate_run_id": candidate["id"],
+                "results": preflight_results,
+            },
+            source_refs=[candidate["id"], *source_refs],
+            created_by="mutation_lab",
+        )
+        failed_preflight = next((result for result in preflight_results if result.get("returncode") != 0), None)
+        if failed_preflight is not None:
+            summary = f"{plan['summary']} Preflight failed with exit code {failed_preflight['returncode']}."
+            self.storage.update_task_run(candidate["id"], status="failed", result_summary=summary[:500])
+            self._record_source_feedback(
+                source_refs,
+                event="mutation_preflight_failed",
+                mutation_failure_count=1,
+                preflight_failure_count=1,
+                noisy_count=1,
+            )
             return
         command_result = None
         if candidate.get("command"):
@@ -193,7 +230,7 @@ class MutationLab:
                     "candidate_run_id": candidate["id"],
                     "result": result,
                 },
-                source_refs=[candidate["id"]],
+                source_refs=[candidate["id"], *source_refs],
                 created_by="mutation_lab",
             )
         verdict = self.guardrails.evaluate(
@@ -208,19 +245,22 @@ class MutationLab:
                 "candidate_run_id": candidate["id"],
                 "verdict": verdict,
             },
-            source_refs=[candidate["id"]],
+            source_refs=[candidate["id"], *source_refs],
             created_by="mutation_guardrails",
         )
 
         if command_result and command_result.get("returncode") != 0:
             status = "failed"
             summary = f"Mutation {operator} failed with exit code {command_result['returncode']}."
+            self._record_source_feedback(source_refs, event="mutation_failed", mutation_failure_count=1)
         elif verdict["allowed"]:
             status = "ready_for_promotion"
             summary = f"{plan['summary']} Awaiting explicit promotion."
+            self._record_source_feedback(source_refs, event="mutation_ready", mutation_success_count=1)
         else:
             status = "quarantined"
             summary = f"{plan['summary']} Guardrails quarantined this mutation."
+            self._record_source_feedback(source_refs, event="mutation_quarantined", mutation_failure_count=1, noisy_count=1)
         self.storage.update_task_run(candidate["id"], status=status, result_summary=summary[:500])
 
     def _apply_edits(self, worktree: Path, edits: list[dict], allowed_paths: list[str] | None = None) -> tuple[list[dict], list[str]]:
@@ -291,6 +331,32 @@ class MutationLab:
             normalized = normalized[2:]
         return normalized.lstrip("/")
 
+    def _run_preflight(self, candidate: dict, plan: dict, applied_edits: list[dict]) -> list[dict]:
+        target_path = candidate.get("target_path")
+        if not target_path:
+            return []
+        commands = self._preflight_commands(candidate, plan, applied_edits)
+        results: list[dict] = []
+        for command in commands:
+            result = self.sandbox_runner.run(command, target_path)
+            results.append(result)
+            if result.get("returncode") != 0:
+                break
+        return results
+
+    def _preflight_commands(self, candidate: dict, plan: dict, applied_edits: list[dict]) -> list[str]:
+        commands: list[str] = []
+        edited_paths = [str(edit.get("path", "")).strip() for edit in applied_edits if str(edit.get("path", "")).strip()]
+        python_paths = [path for path in edited_paths if path.endswith(".py")]
+        if python_paths:
+            joined = " ".join(sorted(dict.fromkeys(python_paths)))
+            commands.append(f"python -m compileall {joined}")
+        focused_tests = list((plan.get("fault_localization") or {}).get("focused_tests") or [])
+        if focused_tests and "pytest" in str(candidate.get("command") or "").lower():
+            joined_tests = " ".join(sorted(dict.fromkeys(focused_tests[:2])))
+            commands.append(f"python -m pytest {joined_tests} -q")
+        return commands
+
     def _failure_context_for_run(self, run_id: str) -> str:
         run = self.storage.get_task_run(run_id)
         parts: list[str] = []
@@ -307,6 +373,28 @@ class MutationLab:
                 parts.extend([result.get("stdout", ""), result.get("stderr", "")])
         compact = "\n".join(part.strip() for part in parts if part and str(part).strip())
         return compact[:8000]
+
+    def _negative_patch_memory(self, parent_run_id: str, limit: int = 4) -> list[str]:
+        siblings = []
+        for run in self.storage.list_task_runs():
+            payload = run.get("input_payload") or {}
+            if payload.get("mutation_parent_run_id") != parent_run_id:
+                continue
+            if run["status"] not in {"failed", "quarantined"}:
+                continue
+            operator = str(payload.get("mutation_operator") or "unknown")
+            summary = str(run.get("result_summary") or run["status"])
+            siblings.append(f"{operator}: {summary}")
+        return siblings[:limit]
+
+    def _mutation_source_refs(self, candidate: dict) -> list[str]:
+        payload = candidate.get("input_payload") or {}
+        refs = [str(item).strip() for item in (payload.get("mutation_source_refs") or []) if str(item).strip()]
+        return list(dict.fromkeys(refs))
+
+    def _record_source_feedback(self, source_refs: list[str], event: str, **deltas: int) -> None:
+        for source_ref in source_refs:
+            self.storage.record_scout_feedback(source_ref, last_event=event, **deltas)
 
     def _promotion_review_verdict(self, candidate: dict) -> dict | None:
         candidate_run_id = candidate["id"]

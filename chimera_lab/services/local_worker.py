@@ -138,13 +138,23 @@ class LocalWorker:
         return commands
 
     def plan_mutation(self, mission: dict | None, program: dict | None, run: dict, operator: str, worktree_path: str) -> dict[str, Any]:
-        file_context, selection_rationale, selected_files = self._mutation_file_context(worktree_path, run)
+        localization = self.build_fault_localization(run, worktree_path)
+        file_context = localization["file_context"]
+        selection_rationale = localization["selection_rationale"]
+        selected_files = localization["selected_files"]
+        payload = run.get("input_payload") or {}
+        negative_memory = payload.get("mutation_negative_memory") or []
         prompt = "\n".join(
             [
                 self._build_prompt(mission, program, run),
                 f"Mutation operator: {operator}",
                 f"Isolated worktree: {worktree_path}",
+                f"Fault localization summary: {localization['summary']}",
+                f"Likely defect classes: {', '.join(localization['defect_classes']) or 'unknown'}",
+                f"Focused tests: {', '.join(localization['focused_tests']) or 'None'}",
                 f"File selection rationale: {selection_rationale}",
+                "Prior failed mutation attempts to avoid repeating:",
+                *([f"- {item}" for item in negative_memory[:4]] or ["- None recorded."]),
                 "You must produce machine-applicable diff blocks using exact search/replace operations.",
                 "Return only this format:",
                 "<<<SUMMARY>>>",
@@ -169,7 +179,36 @@ class LocalWorker:
         plan = self._parse_diff_plan(response, operator)
         plan["selected_files"] = selected_files
         plan["selection_rationale"] = selection_rationale
+        plan["fault_localization"] = localization
         return plan
+
+    def build_fault_localization(self, run: dict, worktree_path: str) -> dict[str, Any]:
+        file_context, selection_rationale, selected_files = self._mutation_file_context(worktree_path, run)
+        payload = run.get("input_payload") or {}
+        failure_context = self._mutation_failure_context(run)
+        defect_classes = self._defect_classes(failure_context, run.get("command") or "")
+        focused_tests = self._focused_tests(selected_files, run.get("command") or "")
+        likely_sources = [path for path in selected_files if path not in focused_tests]
+        summary_parts = []
+        if focused_tests:
+            summary_parts.append(f"Failure is exposed by {', '.join(focused_tests[:3])}.")
+        if likely_sources:
+            summary_parts.append(f"Most likely fix surface is {', '.join(likely_sources[:3])}.")
+        if defect_classes:
+            summary_parts.append(f"Probable defect class: {', '.join(defect_classes[:3])}.")
+        if payload.get("mutation_failure_summary"):
+            summary_parts.append(f"Parent summary: {str(payload['mutation_failure_summary'])[:180]}")
+        summary = " ".join(summary_parts) or "No strong localization signal; prefer the smallest safe patch."
+        return {
+            "summary": summary,
+            "failure_context": failure_context[:2000],
+            "selected_files": selected_files,
+            "selection_rationale": selection_rationale,
+            "focused_tests": focused_tests,
+            "likely_sources": likely_sources[:4],
+            "defect_classes": defect_classes,
+            "file_context": file_context,
+        }
 
     def _parse_diff_plan(self, response: str, operator: str) -> dict[str, Any]:
         text = response.strip()
@@ -505,6 +544,36 @@ class LocalWorker:
                 seen.add(token)
                 deduped.append(token)
         return deduped[:20]
+
+    def _defect_classes(self, failure_context: str, command: str) -> list[str]:
+        text = " ".join([failure_context.lower(), command.lower()])
+        labels: list[str] = []
+        heuristics = [
+            ("assertion mismatch", ["assert ", "assertionerror", "expected", "=="]),
+            ("import or module resolution", ["modulenotfounderror", "importerror", "cannot import"]),
+            ("syntax or parse error", ["syntaxerror", "indentationerror", "invalid syntax"]),
+            ("attribute or api mismatch", ["attributeerror", "has no attribute", "unexpected keyword"]),
+            ("type mismatch", ["typeerror", "valueerror"]),
+            ("test expectation drift", ["pytest", "tests/", "test_"]),
+        ]
+        for label, markers in heuristics:
+            if any(marker in text for marker in markers):
+                labels.append(label)
+        return labels[:4]
+
+    def _focused_tests(self, selected_files: list[str], command: str) -> list[str]:
+        tests = [path for path in selected_files if self._looks_like_test_path(path)]
+        normalized = command.replace("\\", "/")
+        for match in re.findall(r"(tests/[\w./-]+\.py|test_[\w./-]+\.py)", normalized):
+            cleaned = match.strip()
+            if cleaned not in tests:
+                tests.append(cleaned)
+        return tests[:4]
+
+    def _looks_like_test_path(self, relative_path: str) -> bool:
+        path = relative_path.replace("\\", "/").lower()
+        name = Path(path).name.lower()
+        return path.startswith("tests/") or "/tests/" in path or name.startswith("test_")
 
     def _organ_context(self, payload: dict[str, Any]) -> str:
         sections = []

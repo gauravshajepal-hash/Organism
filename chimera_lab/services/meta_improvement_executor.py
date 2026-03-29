@@ -25,6 +25,7 @@ class MetaImprovementExecutor:
             raise KeyError(session_id)
 
         execution_plan = self._execution_plan(session)
+        source_refs = self._source_refs_for_session(session_id)
         mission = self.storage.create_mission(
             title=f"Meta Improvement {session['target']}",
             goal=session["objective"],
@@ -57,6 +58,7 @@ class MetaImprovementExecutor:
                 "mutation_candidate_files": execution_plan["candidate_files"],
                 "retry_commands": execution_plan["retry_commands"],
                 "mutation_failure_summary": session["objective"],
+                "meta_improvement_source_refs": source_refs,
             },
         )
         mutation_job = None
@@ -68,6 +70,7 @@ class MetaImprovementExecutor:
             "strategy": execution_plan["strategy"],
             "candidate_files": execution_plan["candidate_files"],
             "command": execution_plan["command"],
+            "source_refs": source_refs,
             "status": "created",
         }
         try:
@@ -80,6 +83,8 @@ class MetaImprovementExecutor:
                 )
                 execution["base_run_status"] = staged["status"]
                 execution["status"] = "staged"
+                for source_ref in source_refs:
+                    self.storage.record_scout_feedback(source_ref, staged_count=1, last_event="meta_improvement_staged")
             else:
                 execution["base_run_status"] = base_run["status"]
         except Exception as exc:  # noqa: BLE001
@@ -99,6 +104,14 @@ class MetaImprovementExecutor:
             created_by="meta_improvement_executor",
         )
         return execution
+
+    def _source_refs_for_session(self, session_id: str) -> list[str]:
+        refs: list[str] = []
+        for artifact in self.artifact_store.list_for_source_ref(session_id, limit=50):
+            for source_ref in artifact.get("source_refs", []):
+                if source_ref and source_ref != session_id and not source_ref.startswith(("meta_", "artifact_", "mission_", "program_", "run_", "mutation_")):
+                    refs.append(str(source_ref))
+        return list(dict.fromkeys(refs))[:10]
 
     def _execution_plan(self, session: dict[str, Any]) -> dict[str, Any]:
         target = str(session.get("target") or "")
