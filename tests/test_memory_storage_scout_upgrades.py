@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -40,6 +41,59 @@ def test_analytics_mirror_fallback_append_scan_and_export(tmp_path: Path) -> Non
     status = mirror.status()
     assert status["backend"] == "jsonl"
     assert status["tables"]["runs"]["rows"] == 2
+
+
+def test_analytics_mirror_retries_retryable_duckdb_conflict(tmp_path: Path) -> None:
+    mirror = AnalyticsMirror(tmp_path / "mirror", prefer_duckdb=False)
+    mirror._duckdb = object()
+    calls = {"count": 0}
+
+    def flaky_mirror(table: str, parquet_path: Path | None = None) -> None:  # noqa: ARG001
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise Exception('TransactionContext Error: Catalog write-write conflict on alter with "Schema\\0main\\0main\\0Table\\0main\\0artifacts"')
+
+    original = mirror._mirror_table
+
+    def wrapped(table: str, parquet_path: Path | None = None) -> None:
+        last_error: Exception | None = None
+        for attempt in range(4):
+            try:
+                flaky_mirror(table, parquet_path)
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if attempt >= 3 or not mirror._is_retryable_duckdb_error(exc):
+                    raise
+        if last_error is not None:
+            raise last_error
+
+    mirror._mirror_table = wrapped  # type: ignore[method-assign]
+    row = mirror.append("artifacts", {"kind": "runtime_crash"})
+    mirror._mirror_table = original  # type: ignore[method-assign]
+
+    assert row["table"] == "artifacts"
+    assert calls["count"] == 2
+
+
+def test_analytics_mirror_append_is_thread_safe(tmp_path: Path) -> None:
+    mirror = AnalyticsMirror(tmp_path / "mirror", prefer_duckdb=False)
+    rows_per_thread = 20
+    thread_count = 4
+
+    def write_rows(thread_id: int) -> None:
+        for index in range(rows_per_thread):
+            mirror.append("artifacts", {"thread": thread_id, "index": index})
+
+    threads = [threading.Thread(target=write_rows, args=(thread_id,)) for thread_id in range(thread_count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    rows = mirror.scan("artifacts")
+    assert len(rows) == rows_per_thread * thread_count
+    assert len({row["id"] for row in rows}) == len(rows)
 
 
 def test_memory_tier_orchestrator_graph_vector_and_promotion(tmp_path: Path) -> None:
