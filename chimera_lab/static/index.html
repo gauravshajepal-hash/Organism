@@ -7,327 +7,90 @@
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
-    <main class="shell">
-      <header class="hero">
-        <div>
-          <p class="eyebrow">Chimera Lab v1</p>
-          <h1>Operator Kernel</h1>
-          <p class="lede">Local missions, bounded runs, artifact-first memory, automated organ prep for research runs, and frontier review when needed.</p>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-block">
+          <p class="eyebrow">Chimera Lab</p>
+          <h1>Organism Chat</h1>
+          <p class="sidebar-copy">
+            A simple operator view. Talk to the organism, watch upgrade attempts, and keep an eye on safety and health.
+          </p>
         </div>
-        <button id="refreshButton" class="ghost">Refresh</button>
-      </header>
 
-      <section class="grid">
-        <article class="card">
-          <h2>Create Mission</h2>
-          <form id="missionForm">
-            <label>Title<input name="title" required /></label>
-            <label>Goal<textarea name="goal" rows="3" required></textarea></label>
-            <label>Priority
-              <select name="priority">
-                <option value="normal">normal</option>
-                <option value="high">high</option>
-                <option value="critical">critical</option>
-              </select>
-            </label>
-            <button type="submit">Create mission</button>
-          </form>
-        </article>
-
-        <article class="card">
-          <h2>Create Program</h2>
-          <form id="programForm">
-            <label>Mission ID<input name="mission_id" required /></label>
-            <label>Objective<textarea name="objective" rows="3" required></textarea></label>
-            <label>Acceptance Criteria<textarea name="acceptance" rows="3" placeholder="One line per criterion"></textarea></label>
-            <button type="submit">Create program</button>
-          </form>
-        </article>
-
-        <article class="card">
-          <h2>Create Run</h2>
-          <form id="runForm">
-            <label>Program ID<input name="program_id" required /></label>
-            <label>Task Type
-              <select name="task_type">
-                <option>code</option>
-                <option>plan</option>
-                <option>test</option>
-                <option>fix</option>
-                <option>tool</option>
-                <option>status</option>
-                <option>review</option>
-                <option>risk</option>
-                <option>spec_check</option>
-                <option>research_ingest</option>
-              </select>
-            </label>
-            <label>Instructions<textarea name="instructions" rows="4" required></textarea></label>
-            <label>Target Path<input name="target_path" placeholder="D:\path\to\repo" /></label>
-            <label>Command<input name="command" placeholder="pytest -q" /></label>
-            <button type="submit">Create run</button>
-          </form>
-          <p class="hint">`research_ingest`, `plan`, `review`, `risk`, `spec_check`, and `status` now auto-invoke scout, memory, tree-search, autoresearch, and referee organs during `Start`.</p>
-        </article>
-
-        <article class="card">
-          <h2>Submit Frontier Response</h2>
-          <form id="frontierForm">
-            <label>Run ID<input name="run_id" required /></label>
-            <label>Reviewer Type<input name="reviewer_type" value="planner" required /></label>
-            <label>Decision<input name="decision" value="submitted" required /></label>
-            <label>Content<textarea name="content" rows="4" required></textarea></label>
-            <button type="submit">Attach response</button>
-          </form>
-        </article>
-      </section>
-
-      <section class="grid">
-        <article class="card">
-          <h2>Registry + Scout</h2>
-          <div class="actions stacked">
-            <button id="rescanSkillsButton" type="button">Rescan skills</button>
-            <button id="refreshScoutButton" type="button" class="ghost">Refresh scout seeds</button>
-            <button id="syncScoutFeedsButton" type="button" class="ghost">Sync scout feeds</button>
+        <section class="sidebar-card">
+          <div class="sidebar-card-header">
+            <h2>System</h2>
+            <button id="refreshButton" class="ghost small">Refresh</button>
           </div>
-        </article>
-
-        <article class="card">
-          <h2>Create Research Pipeline</h2>
-          <form id="researchForm">
-            <label>Program ID<input name="program_id" required /></label>
-            <label>Question<textarea name="question" rows="3" required></textarea></label>
-            <button type="submit">Stage pipeline</button>
-          </form>
-        </article>
-
-        <article class="card">
-          <h2>Create Mutation Job</h2>
-          <form id="mutationForm">
-            <label>Base Run ID<input name="run_id" required /></label>
-            <label>Strategy
-              <select name="strategy">
-                <option value="repair">repair</option>
-                <option value="explore">explore</option>
-                <option value="exploit">exploit</option>
-              </select>
-            </label>
-            <label>Iterations<input name="iterations" type="number" min="1" max="4" value="3" /></label>
-            <button type="submit">Stage mutation job</button>
-          </form>
-        </article>
-
-        <article class="card">
-          <h2>Memory Tiers</h2>
-          <form id="memoryIngestForm">
-            <label>Tier
-              <select name="tier">
-                <option value="working">working</option>
-                <option value="semantic">semantic</option>
-                <option value="institutional">institutional</option>
-                <option value="archive">archive</option>
-              </select>
-            </label>
-            <label>Content<textarea name="content" rows="3" required></textarea></label>
-            <label>Tags<textarea name="tags" rows="2" placeholder="one per line"></textarea></label>
-            <button type="submit">Ingest memory</button>
-          </form>
-          <form id="memorySearchForm">
-            <label>Query<input name="query" required /></label>
-            <button type="submit" class="ghost">Search memory</button>
-          </form>
-        </article>
-      </section>
-
-      <section class="grid">
-        <article class="card">
-          <h2>Create Vivarium World</h2>
-          <form id="worldForm">
-            <label>Name<input name="name" required /></label>
-            <label>Premise<textarea name="premise" rows="3" required></textarea></label>
-            <button type="submit">Create world</button>
-          </form>
-        </article>
-
-        <article class="card">
-          <h2>Step Vivarium</h2>
-          <form id="worldStepForm">
-            <label>World ID<input name="world_id" required /></label>
-            <label>Action<input name="action" required /></label>
-            <label>Delta JSON<textarea name="delta" rows="3" placeholder='{"resources": -5, "knowledge": 3}'></textarea></label>
-            <button type="submit">Apply step</button>
-          </form>
-        </article>
-
-        <article class="card">
-          <h2>Research Evolution</h2>
-          <form id="treeSearchForm">
-            <label>Program ID<input name="program_id" required /></label>
-            <label>Question<textarea name="question" rows="2" required></textarea></label>
-            <button type="submit">Create tree search</button>
-          </form>
-          <form id="autoresearchForm">
-            <label>Objective<input name="objective" required /></label>
-            <label>Metric<input name="metric" value="score" required /></label>
-            <button type="submit" class="ghost">Run autoresearch</button>
-          </form>
-          <form id="metaForm">
-            <label>Target<input name="target" required /></label>
-            <label>Objective<input name="objective" required /></label>
-            <button type="submit" class="ghost">Stage meta improvement</button>
-          </form>
-        </article>
-
-        <article class="card">
-          <h2>Company Ops</h2>
-          <form id="ventureForm">
-            <label>Venture ID<input name="venture_id" required /></label>
-            <label>Name<input name="name" required /></label>
-            <label>Thesis<textarea name="thesis" rows="2" required></textarea></label>
-            <label>Budget<input name="budget" type="number" min="0" value="0" /></label>
-            <button type="submit">Create venture</button>
-          </form>
-          <form id="assetForm">
-            <label>Asset ID<input name="asset_id" required /></label>
-            <label>Venture ID<input name="venture_id" required /></label>
-            <label>Type<input name="asset_type" value="api" required /></label>
-            <label>Description<textarea name="description" rows="2" required></textarea></label>
-            <label>Pricing<input name="pricing_model" value="subscription" required /></label>
-            <button type="submit" class="ghost">Create asset</button>
-          </form>
-        </article>
-
-        <article class="card">
-          <h2>Social Vivarium</h2>
-          <form id="socialWorldForm">
-            <label>World ID<input name="world_id" required /></label>
-            <label>Name<input name="name" required /></label>
-            <label>Premise<textarea name="premise" rows="2" required></textarea></label>
-            <label>Agent A<input name="agent_a" value="Atlas" required /></label>
-            <label>Agent B<input name="agent_b" value="Basil" required /></label>
-            <button type="submit">Create social world</button>
-          </form>
-        </article>
-
-        <article class="card">
-          <div class="section-title">
-            <h2>Missions</h2>
+          <div id="systemSummary" class="stack-list"></div>
+          <div class="action-row">
+            <button id="runCycleButton" class="ghost small" type="button">Run one cycle</button>
+            <button id="checkpointButton" class="ghost small" type="button">Backup now</button>
           </div>
-          <div id="missionsList" class="list"></div>
-        </article>
-
-        <article class="card">
-          <div class="section-title">
-            <h2>Runs</h2>
+          <div class="action-row">
+            <button id="compactBacklogButton" class="ghost small" type="button">Clean backlog</button>
+            <button id="toggleSupervisorButton" class="ghost small" type="button">Toggle supervisor</button>
           </div>
-          <div id="runsList" class="list"></div>
-        </article>
+        </section>
 
-        <article class="card wide">
-          <div class="section-title">
-            <h2>Recent Artifacts</h2>
+        <section class="sidebar-card">
+          <div class="sidebar-card-header">
+            <h2>Upgrade attempts</h2>
+            <span id="mutationCount" class="muted">0</span>
           </div>
-          <div id="artifactsList" class="list"></div>
-        </article>
-      </section>
+          <div id="mutationList" class="stack-list"></div>
+        </section>
+      </aside>
 
-      <section class="grid">
-        <article class="card">
-          <div class="section-title">
-            <h2>Skills</h2>
+      <section class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p class="eyebrow">Main thread</p>
+            <h2>Recent conversation with the organism</h2>
           </div>
-          <div id="skillsList" class="list"></div>
-        </article>
+          <p class="workspace-copy">Each item below is shown in plain English. Technical detail stays inside the selected upgrade card.</p>
+        </header>
 
-        <article class="card">
-          <div class="section-title">
-            <h2>Research Pipelines</h2>
+        <section id="mutationDetail" class="focus-panel hidden"></section>
+
+        <section id="chatThread" class="chat-thread"></section>
+
+        <form id="chatForm" class="composer">
+          <textarea
+            id="chatInput"
+            name="prompt"
+            rows="4"
+            placeholder="Tell Chimera what to do. Example: Read new papers on agent memory and propose one safe upgrade."
+            required
+          ></textarea>
+
+          <details class="advanced">
+            <summary>More options</summary>
+            <div class="advanced-grid">
+              <label>Task type
+                <select id="taskType" name="task_type">
+                  <option value="auto">Auto</option>
+                  <option value="code">Code</option>
+                  <option value="plan">Plan</option>
+                  <option value="research_ingest">Research</option>
+                  <option value="review">Review</option>
+                  <option value="risk">Risk check</option>
+                </select>
+              </label>
+              <label>Target path
+                <input id="targetPath" name="target_path" placeholder="Optional local path" />
+              </label>
+              <label class="wide">Command
+                <input id="command" name="command" placeholder="Optional shell command, for example: python -m pytest -q" />
+              </label>
+            </div>
+          </details>
+
+          <div class="composer-row">
+            <button id="sendButton" type="submit">Send</button>
+            <p id="statusMessage" class="status-text"></p>
           </div>
-          <div id="pipelinesList" class="list"></div>
-        </article>
-
-        <article class="card">
-          <div class="section-title">
-            <h2>Mutation Jobs</h2>
-          </div>
-          <div id="mutationJobsList" class="list"></div>
-        </article>
-
-        <article class="card">
-          <div class="section-title">
-            <h2>Memory Search</h2>
-          </div>
-          <div id="memoryResultsList" class="list"></div>
-        </article>
-      </section>
-
-      <section class="grid">
-        <article class="card wide">
-          <div class="section-title">
-            <h2>Vivarium Worlds</h2>
-          </div>
-          <div id="worldsList" class="list"></div>
-        </article>
-
-        <article class="card">
-          <div class="section-title">
-            <h2>Scout Feeds</h2>
-          </div>
-          <div id="scoutFeedsList" class="list"></div>
-        </article>
-
-        <article class="card">
-          <div class="section-title">
-            <h2>Tree Searches</h2>
-          </div>
-          <div id="treeSearchesList" class="list"></div>
-        </article>
-
-        <article class="card">
-          <div class="section-title">
-            <h2>Autoresearch</h2>
-          </div>
-          <div id="autoresearchList" class="list"></div>
-        </article>
-
-        <article class="card">
-          <div class="section-title">
-            <h2>Meta Improvements</h2>
-          </div>
-          <div id="metaList" class="list"></div>
-        </article>
-
-        <article class="card">
-          <div class="section-title">
-            <h2>Social Worlds</h2>
-          </div>
-          <div id="socialWorldsList" class="list"></div>
-        </article>
-
-        <article class="card wide">
-          <div class="section-title">
-            <h2>Company Snapshot</h2>
-          </div>
-          <div id="companySnapshot" class="list"></div>
-        </article>
-
-        <article class="card">
-          <div class="section-title">
-            <h2>Merge Records</h2>
-          </div>
-          <div id="mergeRecordsList" class="list"></div>
-        </article>
-
-        <article class="card">
-          <div class="section-title">
-            <h2>Analytics</h2>
-          </div>
-          <div id="analyticsList" class="list"></div>
-        </article>
-      </section>
-
-      <section class="toast-row">
-        <p id="statusMessage"></p>
+        </form>
       </section>
     </main>
     <script src="/static/app.js" defer></script>

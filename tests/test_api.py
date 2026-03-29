@@ -61,6 +61,12 @@ def test_local_run_flow(tmp_path: Path) -> None:
     assert "local_worker_output" in artifact_types
     assert "sandbox_execution" in artifact_types
 
+    run_artifacts = client.get(f"/runs/{run['id']}/artifacts")
+    assert run_artifacts.status_code == 200
+    run_artifact_types = {item["type"] for item in run_artifacts.json()}
+    assert "local_worker_output" in run_artifact_types
+    assert "sandbox_execution" in run_artifact_types
+
 
 def test_frontier_run_flow(tmp_path: Path) -> None:
     client = make_client(tmp_path)

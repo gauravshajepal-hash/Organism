@@ -500,6 +500,16 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Artifact not found")
         return Artifact.model_validate(artifact)
 
+    @app.get("/runs/{run_id}/artifacts", response_model=list[Artifact])
+    def list_run_artifacts(run_id: str, type_: str | None = None, limit: int = 200, services: AppServices = Depends(get_services)) -> list[Artifact]:
+        run = services.storage.get_task_run(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return [
+            Artifact.model_validate(item)
+            for item in services.artifact_store.list_for_source_ref(run_id, type_=type_, limit=limit)
+        ]
+
     @app.post("/memory/store", response_model=MemoryRecord)
     def memory_store(payload: MemoryStoreRequest, services: AppServices = Depends(get_services)) -> MemoryRecord:
         record = services.memory_service.store(

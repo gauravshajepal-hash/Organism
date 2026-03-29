@@ -1,5 +1,7 @@
-const statusMessage = document.getElementById("statusMessage");
-let memoryResults = [];
+const state = {
+  selectedMutationId: null,
+  supervisorRunning: false,
+};
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -21,557 +23,582 @@ async function safeApi(path, fallback) {
   }
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function stripMarkdown(value) {
+  return String(value ?? "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/[*_#>\-\[\]\(\)\|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function truncate(value, maxLength = 220) {
+  const text = stripMarkdown(value);
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength - 1).trim()}…`;
+}
+
+function taskLabel(taskType) {
+  const labels = {
+    code: "Coding",
+    plan: "Planning",
+    research_ingest: "Research",
+    review: "Review",
+    risk: "Risk check",
+    spec_check: "Fit check",
+    status: "Status check",
+    tool: "Tool work",
+    test: "Testing",
+    fix: "Fixing",
+  };
+  return labels[taskType] || String(taskType || "Run").replaceAll("_", " ");
+}
+
+function statusLabel(status) {
+  const labels = {
+    created: "waiting to start",
+    running: "running",
+    completed: "finished",
+    failed: "failed",
+    ready_for_promotion: "waiting for approval",
+    promoted: "accepted",
+    quarantined: "blocked for safety",
+    staged_for_mutation: "staged for upgrade testing",
+    awaiting_frontier_input: "waiting for outside review",
+    superseded: "superseded",
+  };
+  return labels[status] || String(status || "unknown").replaceAll("_", " ");
+}
+
+function formatTime(value) {
+  if (!value) {
+    return "unknown time";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  return date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
 function linesToArray(value) {
-  return value
+  return String(value || "")
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
 }
 
 function setStatus(text, isError = false) {
+  const statusMessage = document.getElementById("statusMessage");
   statusMessage.textContent = text;
-  statusMessage.className = isError ? "error" : "ok";
+  statusMessage.className = isError ? "status-text error" : "status-text";
 }
 
-function renderList(el, items, renderItem) {
-  if (!el) return;
+function inferTaskType(prompt, selected) {
+  if (selected && selected !== "auto") {
+    return selected;
+  }
+  const text = String(prompt || "").toLowerCase();
+  if (/\b(plan|roadmap|design|architecture|strategy)\b/.test(text)) {
+    return "plan";
+  }
+  if (/\b(read|research|paper|arxiv|discover|ingest|literature)\b/.test(text)) {
+    return "research_ingest";
+  }
+  if (/\b(review|audit|critique)\b/.test(text)) {
+    return "review";
+  }
+  if (/\b(risk|danger|safety)\b/.test(text)) {
+    return "risk";
+  }
+  return "code";
+}
+
+function titleFromPrompt(prompt) {
+  const words = stripMarkdown(prompt).split(/\s+/).filter(Boolean).slice(0, 8);
+  return words.length ? words.join(" ") : "New organism task";
+}
+
+function renderStackList(el, items, render, emptyTitle, emptyBody) {
   el.innerHTML = "";
+  if (!items.length) {
+    el.innerHTML = `
+      <div class="mini-card empty">
+        <strong>${escapeHtml(emptyTitle)}</strong>
+        <p>${escapeHtml(emptyBody)}</p>
+      </div>
+    `;
+    return;
+  }
   items.forEach((item) => {
     const node = document.createElement("div");
-    node.className = "list-item";
-    node.innerHTML = renderItem(item);
+    node.className = "mini-card";
+    node.innerHTML = render(item);
     el.appendChild(node);
   });
 }
 
-function formatJson(value) {
-  return JSON.stringify(value, null, 2);
+function humanSourceLabel(sourceRef, scoutMap) {
+  const scout = scoutMap.get(sourceRef);
+  if (scout) {
+    return scout.source_ref.includes("github.com")
+      ? scout.source_ref.split("/").slice(-1)[0] || scout.source_ref
+      : scout.source_ref;
+  }
+  return sourceRef;
 }
 
-async function refresh() {
-  const [
-    missions,
-    runs,
-    artifacts,
-    skills,
-    pipelines,
-    mutationJobs,
-    worlds,
-    feedCatalog,
-    treeSearches,
-    autoresearchRuns,
-    metaImprovements,
-    socialWorlds,
-    companySnapshot,
-    mergeRecords,
-    analyticsStatus,
-  ] = await Promise.all([
-    api("/missions"),
-    api("/runs"),
-    api("/artifacts?limit=20"),
-    api("/skills"),
-    api("/research/pipelines"),
-    api("/mutation/jobs"),
-    api("/vivarium/worlds"),
-    safeApi("/scout/feeds/catalog", []),
-    safeApi("/research/tree-searches", []),
-    safeApi("/research/autoresearch", []),
-    safeApi("/research/meta-improvements", []),
-    safeApi("/social/worlds", []),
-    safeApi("/company", {}),
-    safeApi("/merges/records", []),
-    safeApi("/analytics/status", {}),
+function sourceSummary(sourceRef, scoutMap) {
+  const scout = scoutMap.get(sourceRef);
+  if (!scout) {
+    return null;
+  }
+  const trust = typeof scout.trust_score === "number" ? scout.trust_score.toFixed(2) : "n/a";
+  const novelty = typeof scout.novelty_score === "number" ? scout.novelty_score.toFixed(2) : "n/a";
+  return `${truncate(scout.summary, 120)} Trust ${trust}, novelty ${novelty}.`;
+}
+
+function sortByDate(items) {
+  return [...items].sort((a, b) => new Date(a.created_at || a.updated_at || 0) - new Date(b.created_at || b.updated_at || 0));
+}
+
+function reverseByDate(items) {
+  return sortByDate(items).reverse();
+}
+
+async function loadMutationDetail(run, scoutMap) {
+  const [artifacts, reviews] = await Promise.all([
+    safeApi(`/runs/${run.id}/artifacts?limit=200`, []),
+    safeApi(`/runs/${run.id}/reviews`, []),
   ]);
+  const byType = (type) => artifacts.filter((item) => item.type === type);
+  const latest = (type) => byType(type)[0] || null;
+  const payload = run.input_payload || {};
+  const sourceRefs = [...new Set([...(payload.mutation_source_refs || []), ...(payload.meta_improvement_source_refs || [])])];
+  const candidateArtifact = latest("mutation_candidate");
+  const localizationArtifact = latest("mutation_fault_localization");
+  const guardrailArtifact = latest("mutation_guardrail_verdict");
+  const preflightArtifact = latest("mutation_preflight");
+  const applyRepairArtifact = latest("mutation_apply_repair");
+  const preflightRepairArtifact = latest("mutation_preflight_repair");
+  const winningReview = [...reviews]
+    .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))[0] || null;
 
-  renderList(document.getElementById("missionsList"), missions, (mission) => `
-    <strong>${mission.title}</strong>
-    <span>${mission.id}</span>
-    <p>${mission.goal}</p>
-    <small>${mission.status} · ${mission.priority}</small>
-  `);
+  const focusSummary = localizationArtifact?.payload?.fault_localization?.summary || "The organism has not explained the fault yet.";
+  const changeSummary = candidateArtifact?.payload?.summary || run.result_summary || "No change summary yet.";
+  const selectedFiles = candidateArtifact?.payload?.selected_files || localizationArtifact?.payload?.fault_localization?.selected_files || [];
+  const guardrail = guardrailArtifact?.payload?.verdict || {};
+  const guardrailText = guardrail.allowed
+    ? `Safety checks passed. It stayed within ${guardrail.edited_paths?.length || 0} file(s) and ${guardrail.changed_lines || 0} changed line(s).`
+    : `Safety checks blocked it. ${((guardrail.violations || []).join("; ") || "The guardrail payload did not explain why.")}`;
+  const reviewText = winningReview
+    ? `${winningReview.reviewer_type} said "${winningReview.decision}" with confidence ${Number(winningReview.confidence || 0).toFixed(2)}.`
+    : "No second-layer review yet.";
+  const repairNotes = [];
+  if (applyRepairArtifact) {
+    repairNotes.push("The first patch did not apply cleanly, so the organism tried one smaller repair patch.");
+  }
+  if (preflightRepairArtifact) {
+    repairNotes.push("A preflight check failed, so the organism tried one corrective patch before giving up.");
+  }
+  if (preflightArtifact?.payload?.repaired && !repairNotes.length) {
+    repairNotes.push("The organism needed one repair pass before the patch became usable.");
+  }
 
-  renderList(document.getElementById("runsList"), runs, (run) => `
-    <strong>${run.task_type}</strong>
-    <span>${run.id}</span>
-    <p>${run.instructions}</p>
-    <small>${run.worker_tier} · ${run.status}</small>
-    <small>${(run.input_payload?.auto_organs || []).join(", ") || "no auto organs"}</small>
-    <div class="actions">
-      <button data-run-start="${run.id}">Start</button>
-    </div>
-  `);
+  return {
+    run,
+    artifacts,
+    reviews,
+    sourceRefs,
+    sourceLines: sourceRefs.map((sourceRef) => ({
+      ref: sourceRef,
+      label: humanSourceLabel(sourceRef, scoutMap),
+      summary: sourceSummary(sourceRef, scoutMap),
+    })),
+    focusSummary,
+    changeSummary,
+    selectedFiles,
+    guardrailText,
+    reviewText,
+    nextStep: statusLabel(run.status),
+    repairNotes,
+  };
+}
 
-  renderList(document.getElementById("artifactsList"), artifacts, (artifact) => `
-    <strong>${artifact.type}</strong>
-    <span>${artifact.id}</span>
-    <pre>${formatJson(artifact.payload)}</pre>
-  `);
+function renderSystemSummary(system, supervisorStatus) {
+  state.supervisorRunning = Boolean(supervisorStatus?.running);
+  document.getElementById("toggleSupervisorButton").textContent = state.supervisorRunning ? "Stop supervisor" : "Start supervisor";
 
-  renderList(document.getElementById("skillsList"), skills, (skill) => `
-    <strong>${skill.name}</strong>
-    <span>${skill.category}</span>
-    <p>${skill.metadata.summary || ""}</p>
-  `);
+  renderStackList(
+    document.getElementById("systemSummary"),
+    [
+      {
+        title: "Supervisor",
+        body: state.supervisorRunning ? "Running and cycling." : "Stopped.",
+      },
+      {
+        title: "Backlog",
+        body: `${system.pendingObjectives} pending objective(s), ${system.runningObjectives} running.`,
+      },
+      {
+        title: "Git backup",
+        body: system.gitSummary,
+      },
+      {
+        title: "Runtime",
+        body: system.runtimeSummary,
+      },
+    ],
+    (item) => `
+      <strong>${escapeHtml(item.title)}</strong>
+      <p>${escapeHtml(item.body)}</p>
+    `,
+    "No system data",
+    "The dashboard could not load system status.",
+  );
+}
 
-  renderList(document.getElementById("pipelinesList"), pipelines, (pipeline) => `
-    <strong>${pipeline.question}</strong>
-    <span>${pipeline.id}</span>
-    <small>${pipeline.status} · ${pipeline.stage_run_ids.length} staged runs</small>
-  `);
+function renderMutationList(details) {
+  const el = document.getElementById("mutationList");
+  document.getElementById("mutationCount").textContent = String(details.length);
+  renderStackList(
+    el,
+    details,
+    (detail) => `
+      <button class="mutation-button ${detail.run.id === state.selectedMutationId ? "active" : ""}" data-mutation-id="${escapeHtml(detail.run.id)}" type="button">
+        <strong>${escapeHtml(truncate(detail.changeSummary, 68))}</strong>
+        <span>${escapeHtml(statusLabel(detail.run.status))}</span>
+        <small>${escapeHtml(detail.sourceLines[0]?.label || "internal trigger")}</small>
+      </button>
+    `,
+    "No upgrade attempts",
+    "The organism has not staged any mutation candidates yet.",
+  );
 
-  renderList(document.getElementById("mutationJobsList"), mutationJobs, (job) => `
-    <strong>${job.strategy}</strong>
-    <span>${job.id}</span>
-    <small>${job.status} · ${job.candidate_run_ids.length} candidates</small>
-  `);
-
-  renderList(document.getElementById("worldsList"), worlds, (world) => `
-    <strong>${world.name}</strong>
-    <span>${world.id}</span>
-    <p>${world.premise}</p>
-    <pre>${formatJson(world.state)}</pre>
-  `);
-
-  renderList(document.getElementById("scoutFeedsList"), feedCatalog, (feed) => `
-    <strong>${feed.feed_name}</strong>
-    <span>${feed.source_kind}</span>
-    <p>${feed.source_url}</p>
-  `);
-
-  renderList(document.getElementById("treeSearchesList"), treeSearches.slice(0, 6), (item) => `
-    <strong>${item.question}</strong>
-    <span>${item.id}</span>
-    <small>${item.nodes.length} nodes · ${item.experiments.length} experiments</small>
-  `);
-
-  renderList(document.getElementById("autoresearchList"), autoresearchRuns.slice(0, 6), (item) => `
-    <strong>${item.objective}</strong>
-    <span>${item.id}</span>
-    <small>${item.metric} · best ${item.best_iteration.score}</small>
-  `);
-
-  renderList(document.getElementById("metaList"), metaImprovements.slice(0, 6), (item) => `
-    <strong>${item.target}</strong>
-    <span>${item.id}</span>
-    <small>${item.objective}</small>
-    <pre>${formatJson(item.winner)}</pre>
-  `);
-
-  renderList(document.getElementById("socialWorldsList"), socialWorlds, (item) => `
-    <strong>${item.name}</strong>
-    <span>${item.world_id}</span>
-    <small>${item.agents} agents · ${item.relationships} relationships</small>
-  `);
-
-  renderList(document.getElementById("companySnapshot"), companySnapshot.ventures || [], (venture) => `
-    <strong>${venture.name}</strong>
-    <span>${venture.venture_id}</span>
-    <small>budget ${venture.budget} · revenue ${venture.revenue}</small>
-    <pre>${formatJson(companySnapshot.treasury || {})}</pre>
-  `);
-
-  renderList(document.getElementById("mergeRecordsList"), mergeRecords, (merge) => `
-    <strong>${merge.result_name}</strong>
-    <span>${merge.id}</span>
-    <small>${merge.recipe_name}</small>
-    <pre>${formatJson(merge.metrics)}</pre>
-  `);
-
-  renderList(document.getElementById("analyticsList"), Object.entries(analyticsStatus.tables || {}), ([table, meta]) => `
-    <strong>${table}</strong>
-    <span>${analyticsStatus.backend || "unknown"}</span>
-    <pre>${formatJson(meta)}</pre>
-  `);
-
-  renderList(document.getElementById("memoryResultsList"), memoryResults, (item) => `
-    <strong>${item.record_tier || item.tier}</strong>
-    <span>${item.id}</span>
-    <small>${item.score}</small>
-    <p>${item.content}</p>
-  `);
-
-  document.querySelectorAll("[data-run-start]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      try {
-        const runId = button.dataset.runStart;
-        const result = await api(`/runs/${runId}/start`, { method: "POST" });
-        const autoOrgans = result.input_payload?.auto_organs || [];
-        setStatus(`Started run ${runId}${autoOrgans.length ? ` with ${autoOrgans.join(", ")}` : ""}`);
-        await refresh();
-      } catch (error) {
-        setStatus(error.message, true);
-      }
+  el.querySelectorAll("[data-mutation-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedMutationId = button.dataset.mutationId;
+      renderMutationList(details);
+      renderMutationDetail(details.find((item) => item.run.id === state.selectedMutationId) || null);
     });
   });
 }
 
-document.getElementById("missionForm").addEventListener("submit", async (event) => {
+function renderMutationDetail(detail) {
+  const panel = document.getElementById("mutationDetail");
+  if (!detail) {
+    panel.classList.add("hidden");
+    panel.innerHTML = "";
+    return;
+  }
+  panel.classList.remove("hidden");
+  panel.innerHTML = `
+    <div class="focus-header">
+      <div>
+        <p class="eyebrow">Selected upgrade attempt</p>
+        <h3>${escapeHtml(truncate(detail.changeSummary, 96))}</h3>
+      </div>
+      <span class="status-chip">${escapeHtml(statusLabel(detail.run.status))}</span>
+    </div>
+    <div class="focus-grid">
+      <div class="focus-item">
+        <strong>Where this idea came from</strong>
+        <p>${detail.sourceLines.length ? detail.sourceLines.map((item) => escapeHtml(item.label)).join(", ") : "No outside source was attached."}</p>
+      </div>
+      <div class="focus-item">
+        <strong>Why it looked worth trying</strong>
+        <p>${escapeHtml(detail.focusSummary)}</p>
+      </div>
+      <div class="focus-item">
+        <strong>What files it focused on</strong>
+        <p>${escapeHtml(detail.selectedFiles.length ? detail.selectedFiles.join(", ") : "No file list was recorded.")}</p>
+      </div>
+      <div class="focus-item">
+        <strong>How it judged safety</strong>
+        <p>${escapeHtml(detail.guardrailText)}</p>
+      </div>
+      <div class="focus-item">
+        <strong>Review result</strong>
+        <p>${escapeHtml(detail.reviewText)}</p>
+      </div>
+      <div class="focus-item">
+        <strong>Next step</strong>
+        <p>${escapeHtml(detail.nextStep)}</p>
+      </div>
+    </div>
+    ${detail.sourceLines.length ? `
+      <div class="focus-subsection">
+        <strong>Source notes</strong>
+        <ul>
+          ${detail.sourceLines.map((item) => `<li>${escapeHtml(item.summary || item.label)}</li>`).join("")}
+        </ul>
+      </div>
+    ` : ""}
+    ${detail.repairNotes.length ? `
+      <div class="focus-subsection">
+        <strong>Repair history</strong>
+        <ul>
+          ${detail.repairNotes.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ul>
+      </div>
+    ` : ""}
+    ${detail.run.status === "ready_for_promotion" ? `
+      <div class="focus-actions">
+        <button id="promoteMutationButton" type="button">Promote this upgrade</button>
+      </div>
+    ` : ""}
+  `;
+
+  const promoteButton = document.getElementById("promoteMutationButton");
+  if (promoteButton) {
+    promoteButton.addEventListener("click", async () => {
+      try {
+        await api(`/mutation/candidates/${detail.run.id}/promote`, {
+          method: "POST",
+          body: JSON.stringify({
+            approved_by: "human",
+            reason: "Approved from the simplified dashboard.",
+          }),
+        });
+        setStatus("Upgrade promoted into accepted lineage.");
+        await refreshDashboard();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+  }
+}
+
+function buildThread(runs, mutationIds) {
+  const nonMutationRuns = reverseByDate(runs)
+    .filter((run) => !mutationIds.has(run.id) && !(run.input_payload || {}).mutation_parent_run_id)
+    .slice(0, 10)
+    .reverse();
+
+  const items = [];
+  nonMutationRuns.forEach((run) => {
+    items.push({
+      role: "user",
+      title: taskLabel(run.task_type),
+      meta: formatTime(run.created_at),
+      body: truncate(run.instructions, 240) || "No user prompt recorded.",
+    });
+    items.push({
+      role: "assistant",
+      title: `${taskLabel(run.task_type)} ${statusLabel(run.status)}`,
+      meta: `${run.worker_tier || "worker"}${(run.input_payload?.auto_organs || []).length ? ` · used ${(run.input_payload.auto_organs || []).join(", ").replaceAll("_", " ")}` : ""}`,
+      body: truncate(run.result_summary || "No result summary yet.", 320),
+    });
+  });
+  return items;
+}
+
+function renderThread(items) {
+  const thread = document.getElementById("chatThread");
+  thread.innerHTML = "";
+  if (!items.length) {
+    thread.innerHTML = `
+      <div class="message assistant">
+        <div class="bubble">
+          <strong>No conversation yet</strong>
+          <p>Send a plain-English instruction below to start the first mission.</p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  items.forEach((item) => {
+    const node = document.createElement("div");
+    node.className = `message ${item.role}`;
+    node.innerHTML = `
+      <div class="bubble">
+        <span class="message-role">${escapeHtml(item.role === "user" ? "You" : "Chimera")}</span>
+        <strong>${escapeHtml(item.title)}</strong>
+        <span class="message-meta">${escapeHtml(item.meta || "")}</span>
+        <p>${escapeHtml(item.body)}</p>
+      </div>
+    `;
+    thread.appendChild(node);
+  });
+  thread.scrollTop = thread.scrollHeight;
+}
+
+async function submitChatPrompt(event) {
   event.preventDefault();
-  const data = new FormData(event.target);
+  const sendButton = document.getElementById("sendButton");
+  const chatInput = document.getElementById("chatInput");
+  const taskTypeSelect = document.getElementById("taskType");
+  const targetPathInput = document.getElementById("targetPath");
+  const commandInput = document.getElementById("command");
+  const prompt = chatInput.value.trim();
+  if (!prompt) {
+    return;
+  }
+
+  const inferredTaskType = inferTaskType(prompt, taskTypeSelect.value);
+  const title = titleFromPrompt(prompt);
+  sendButton.disabled = true;
+  setStatus("Creating mission and starting run...");
   try {
-    await api("/missions", {
+    const mission = await api("/missions", {
       method: "POST",
       body: JSON.stringify({
-        title: data.get("title"),
-        goal: data.get("goal"),
-        priority: data.get("priority"),
+        title,
+        goal: prompt,
+        priority: "normal",
       }),
     });
-    event.target.reset();
-    setStatus("Mission created");
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("programForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  try {
-    await api(`/missions/${data.get("mission_id")}/programs`, {
+    const program = await api(`/missions/${mission.id}/programs`, {
       method: "POST",
       body: JSON.stringify({
-        objective: data.get("objective"),
-        acceptance_criteria: linesToArray(data.get("acceptance")),
+        objective: prompt,
+        acceptance_criteria: [`Make useful progress on: ${title}`],
         budget_policy: {},
       }),
     });
-    event.target.reset();
-    setStatus("Program created");
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("runForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  try {
-    await api(`/programs/${data.get("program_id")}/runs`, {
+    const run = await api(`/programs/${program.id}/runs`, {
       method: "POST",
       body: JSON.stringify({
-        task_type: data.get("task_type"),
-        instructions: data.get("instructions"),
-        target_path: data.get("target_path") || null,
-        command: data.get("command") || null,
+        task_type: inferredTaskType,
+        instructions: prompt,
+        target_path: targetPathInput.value.trim() || null,
+        command: commandInput.value.trim() || null,
+        input_payload: {
+          created_from: "chat_dashboard",
+        },
       }),
     });
-    event.target.reset();
-    setStatus("Run created");
-    await refresh();
+    const started = await api(`/runs/${run.id}/start`, { method: "POST" });
+    chatInput.value = "";
+    targetPathInput.value = "";
+    commandInput.value = "";
+    taskTypeSelect.value = "auto";
+    setStatus(`Started ${taskLabel(inferredTaskType).toLowerCase()} run. Current status: ${statusLabel(started.status)}.`);
+    await refreshDashboard();
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    sendButton.disabled = false;
+  }
+}
+
+async function refreshDashboard() {
+  const [
+    missions,
+    runs,
+    supervisorStatus,
+    runtimeStatus,
+    gitStatus,
+    objectives,
+    scoutCandidates,
+  ] = await Promise.all([
+    safeApi("/missions", []),
+    safeApi("/runs", []),
+    safeApi("/ops/supervisor/status", {}),
+    safeApi("/ops/runtime", {}),
+    safeApi("/ops/git/status", {}),
+    safeApi("/objectives", []),
+    safeApi("/scout/candidates", []),
+  ]);
+
+  const scoutMap = new Map(scoutCandidates.map((item) => [item.source_ref, item]));
+  const mutationRuns = reverseByDate(runs)
+    .filter((run) => Boolean((run.input_payload || {}).mutation_parent_run_id))
+    .slice(0, 8);
+  const mutationDetails = await Promise.all(mutationRuns.map((run) => loadMutationDetail(run, scoutMap)));
+  if (!state.selectedMutationId || !mutationDetails.some((item) => item.run.id === state.selectedMutationId)) {
+    state.selectedMutationId = mutationDetails[0]?.run.id || null;
+  }
+
+  const pendingObjectives = objectives.filter((item) => item.status === "pending").length;
+  const runningObjectives = objectives.filter((item) => item.status === "running").length;
+  const runtimeSummary = runtimeStatus?.unclean_shutdown_detected
+    ? "The last session ended badly. Crash memory is available."
+    : "No recent crash marker was detected.";
+  const gitSummary = gitStatus?.is_repo
+    ? gitStatus?.ahead || gitStatus?.dirty
+      ? "Changes exist and backup attention is needed."
+      : "Repository is clean and backed up."
+    : "Git repository is not ready.";
+
+  renderSystemSummary(
+    {
+      pendingObjectives,
+      runningObjectives,
+      gitSummary,
+      runtimeSummary,
+    },
+    supervisorStatus,
+  );
+  renderMutationList(mutationDetails);
+  renderMutationDetail(mutationDetails.find((item) => item.run.id === state.selectedMutationId) || null);
+  renderThread(buildThread(runs, new Set(mutationRuns.map((item) => item.id))));
+}
+
+async function runCycle() {
+  try {
+    await api("/ops/supervisor/run-once", { method: "POST" });
+    setStatus("Ran one supervisor cycle.");
+    await refreshDashboard();
   } catch (error) {
     setStatus(error.message, true);
   }
-});
+}
 
-document.getElementById("frontierForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
+async function checkpointNow() {
   try {
-    await api(`/runs/${data.get("run_id")}/frontier-response`, {
+    await api("/ops/git/checkpoint", {
       method: "POST",
-      body: JSON.stringify({
-        reviewer_type: data.get("reviewer_type"),
-        decision: data.get("decision"),
-        content: data.get("content"),
-      }),
+      body: JSON.stringify({ reason: "manual-dashboard-backup", push: true }),
     });
-    event.target.reset();
-    setStatus("Frontier response attached");
-    await refresh();
+    setStatus("Backup checkpoint completed.");
+    await refreshDashboard();
   } catch (error) {
     setStatus(error.message, true);
   }
-});
+}
 
-document.getElementById("rescanSkillsButton").addEventListener("click", async () => {
+async function compactBacklog() {
   try {
-    const skills = await api("/skills/rescan", { method: "POST" });
-    setStatus(`Scanned ${skills.length} skills`);
-    await refresh();
+    await api("/ops/supervisor/compact-backlog", { method: "POST" });
+    setStatus("Backlog cleaned.");
+    await refreshDashboard();
   } catch (error) {
     setStatus(error.message, true);
   }
-});
+}
 
-document.getElementById("refreshScoutButton").addEventListener("click", async () => {
+async function toggleSupervisor() {
   try {
-    const candidates = await api("/scout/refresh-seeds", { method: "POST" });
-    setStatus(`Refreshed ${candidates.length} scout seeds`);
-    await refresh();
+    if (state.supervisorRunning) {
+      await api("/ops/supervisor/stop", { method: "POST" });
+      setStatus("Supervisor stopped.");
+    } else {
+      await api("/ops/supervisor/start", { method: "POST" });
+      setStatus("Supervisor started.");
+    }
+    await refreshDashboard();
   } catch (error) {
     setStatus(error.message, true);
   }
-});
+}
 
-document.getElementById("syncScoutFeedsButton").addEventListener("click", async () => {
-  try {
-    const candidates = await api("/scout/feeds/sync", {
-      method: "POST",
-      body: JSON.stringify({ query: null, limit_per_feed: 8 }),
-    });
-    setStatus(`Synced ${candidates.length} scout feed items`);
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
+document.getElementById("chatForm").addEventListener("submit", submitChatPrompt);
+document.getElementById("refreshButton").addEventListener("click", refreshDashboard);
+document.getElementById("runCycleButton").addEventListener("click", runCycle);
+document.getElementById("checkpointButton").addEventListener("click", checkpointNow);
+document.getElementById("compactBacklogButton").addEventListener("click", compactBacklog);
+document.getElementById("toggleSupervisorButton").addEventListener("click", toggleSupervisor);
 
-document.getElementById("researchForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  try {
-    await api("/research/pipelines", {
-      method: "POST",
-      body: JSON.stringify({
-        program_id: data.get("program_id"),
-        question: data.get("question"),
-        auto_stage: true,
-      }),
-    });
-    event.target.reset();
-    setStatus("Research pipeline staged");
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("mutationForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  try {
-    await api("/mutation/jobs", {
-      method: "POST",
-      body: JSON.stringify({
-        run_id: data.get("run_id"),
-        strategy: data.get("strategy"),
-        iterations: Number(data.get("iterations") || 3),
-        auto_stage: true,
-      }),
-    });
-    event.target.reset();
-    setStatus("Mutation job staged");
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("memoryIngestForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  try {
-    const record = await api("/memory/tiers/ingest", {
-      method: "POST",
-      body: JSON.stringify({
-        content: data.get("content"),
-        tier: data.get("tier"),
-        tags: linesToArray(data.get("tags") || ""),
-      }),
-    });
-    event.target.reset();
-    setStatus(`Memory ingested as ${record.id}`);
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("memorySearchForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  try {
-    memoryResults = await api("/memory/tiers/search", {
-      method: "POST",
-      body: JSON.stringify({
-        query: data.get("query"),
-        limit: 8,
-      }),
-    });
-    setStatus(`Found ${memoryResults.length} memory hits`);
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("treeSearchForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  try {
-    const tree = await api("/research/tree-searches", {
-      method: "POST",
-      body: JSON.stringify({
-        program_id: data.get("program_id"),
-        question: data.get("question"),
-        branch_factor: 3,
-        depth: 2,
-      }),
-    });
-    event.target.reset();
-    setStatus(`Tree search ${tree.id} created`);
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("autoresearchForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  try {
-    const run = await api("/research/autoresearch", {
-      method: "POST",
-      body: JSON.stringify({
-        objective: data.get("objective"),
-        metric: data.get("metric"),
-        iteration_budget: 4,
-      }),
-    });
-    event.target.reset();
-    setStatus(`Autoresearch ${run.id} completed`);
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("metaForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  try {
-    const session = await api("/research/meta-improvements", {
-      method: "POST",
-      body: JSON.stringify({
-        target: data.get("target"),
-        objective: data.get("objective"),
-        candidate_count: 3,
-      }),
-    });
-    event.target.reset();
-    setStatus(`Meta improvement ${session.id} staged`);
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("ventureForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  try {
-    const venture = await api("/company/ventures", {
-      method: "POST",
-      body: JSON.stringify({
-        venture_id: data.get("venture_id"),
-        name: data.get("name"),
-        thesis: data.get("thesis"),
-        budget: Number(data.get("budget") || 0),
-      }),
-    });
-    event.target.reset();
-    setStatus(`Venture ${venture.venture.venture_id} created`);
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("assetForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  try {
-    const asset = await api("/company/assets", {
-      method: "POST",
-      body: JSON.stringify({
-        asset_id: data.get("asset_id"),
-        venture_id: data.get("venture_id"),
-        asset_type: data.get("asset_type"),
-        description: data.get("description"),
-        pricing_model: data.get("pricing_model"),
-      }),
-    });
-    event.target.reset();
-    setStatus(`Asset ${asset.asset.asset_id} created`);
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("worldForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  try {
-    await api("/vivarium/worlds", {
-      method: "POST",
-      body: JSON.stringify({
-        name: data.get("name"),
-        premise: data.get("premise"),
-        initial_state: {},
-      }),
-    });
-    event.target.reset();
-    setStatus("Vivarium world created");
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("socialWorldForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  try {
-    const world = await api("/social/worlds", {
-      method: "POST",
-      body: JSON.stringify({
-        world_id: data.get("world_id"),
-        name: data.get("name"),
-        premise: data.get("premise"),
-        agents: [
-          { agent_id: `${data.get("world_id")}-a`, name: data.get("agent_a"), role: "builder" },
-          { agent_id: `${data.get("world_id")}-b`, name: data.get("agent_b"), role: "scout" },
-        ],
-      }),
-    });
-    event.target.reset();
-    setStatus(`Social world ${world.world_id} created`);
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("worldStepForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  let delta = {};
-  try {
-    delta = data.get("delta") ? JSON.parse(data.get("delta")) : {};
-  } catch (error) {
-    setStatus(`Invalid delta JSON: ${error.message}`, true);
-    return;
-  }
-  try {
-    await api(`/vivarium/worlds/${data.get("world_id")}/step`, {
-      method: "POST",
-      body: JSON.stringify({
-        action: data.get("action"),
-        delta,
-      }),
-    });
-    event.target.reset();
-    setStatus("Vivarium world advanced");
-    await refresh();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-});
-
-document.getElementById("refreshButton").addEventListener("click", refresh);
-
-refresh().catch((error) => setStatus(error.message, true));
+refreshDashboard().catch((error) => setStatus(error.message, true));
