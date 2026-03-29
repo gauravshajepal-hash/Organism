@@ -7,8 +7,30 @@ from unittest.mock import patch
 from chimera_lab.cli import main
 
 
+CLI_ENV_KEYS = (
+    "CHIMERA_ENABLE_SUPERVISOR",
+    "CHIMERA_ENABLE_BACKGROUND_INGESTION",
+    "CHIMERA_ENABLE_OLLAMA",
+    "CHIMERA_FRONTIER_PROVIDER",
+    "CHIMERA_LOCAL_MODEL",
+    "CHIMERA_DATA_DIR",
+)
+
+
+def _snapshot_env() -> dict[str, str | None]:
+    return {key: os.environ.get(key) for key in CLI_ENV_KEYS}
+
+
+def _restore_env(snapshot: dict[str, str | None]) -> None:
+    for key, value in snapshot.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
 def test_cli_run_sets_safe_autonomy_defaults(tmp_path: Path) -> None:
-    previous = {key: os.environ.get(key) for key in ("CHIMERA_ENABLE_SUPERVISOR", "CHIMERA_ENABLE_BACKGROUND_INGESTION", "CHIMERA_ENABLE_OLLAMA", "CHIMERA_FRONTIER_PROVIDER", "CHIMERA_LOCAL_MODEL", "CHIMERA_DATA_DIR")}
+    previous = _snapshot_env()
     for key in previous:
         os.environ.pop(key, None)
     try:
@@ -29,15 +51,13 @@ def test_cli_run_sets_safe_autonomy_defaults(tmp_path: Path) -> None:
         assert kwargs["host"] == "127.0.0.1"
         assert kwargs["port"] == 8000
     finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+        _restore_env(previous)
 
 
 def test_cli_dev_enables_reload_and_respects_overrides(tmp_path: Path) -> None:
-    previous = {key: os.environ.get(key) for key in ("CHIMERA_LOCAL_MODEL", "CHIMERA_FRONTIER_PROVIDER")}
+    previous = _snapshot_env()
+    for key in previous:
+        os.environ.pop(key, None)
     try:
         with patch("chimera_lab.cli.uvicorn.run") as run_mock:
             code = main(
@@ -65,15 +85,11 @@ def test_cli_dev_enables_reload_and_respects_overrides(tmp_path: Path) -> None:
         assert kwargs["host"] == "0.0.0.0"
         assert kwargs["port"] == 9000
     finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+        _restore_env(previous)
 
 
 def test_cli_defaults_to_run_when_no_subcommand_is_given() -> None:
-    previous = {key: os.environ.get(key) for key in ("CHIMERA_ENABLE_SUPERVISOR", "CHIMERA_LOCAL_MODEL")}
+    previous = _snapshot_env()
     for key in previous:
         os.environ.pop(key, None)
     try:
@@ -84,8 +100,4 @@ def test_cli_defaults_to_run_when_no_subcommand_is_given() -> None:
         assert os.environ["CHIMERA_LOCAL_MODEL"] == "qwen3.5:9b"
         run_mock.assert_called_once()
     finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+        _restore_env(previous)
