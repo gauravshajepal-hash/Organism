@@ -270,6 +270,43 @@ def test_live_scout_search_softly_downranks_legal_noise(tmp_path: Path) -> None:
     assert payload[-1]["source_ref"] == "https://github.com/example/legal-noise"
 
 
+def test_live_scout_search_uses_downstream_feedback_signal(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    service = client.app.state.services.scout_service
+    source_ref = "https://github.com/example/promoted-repo"
+    client.app.state.services.storage.record_scout_feedback(
+        source_ref,
+        referenced_count=4,
+        mutation_success_count=1,
+        promotion_count=1,
+        last_event="mutation_promoted",
+    )
+    service._search_github = lambda query, per_source: [  # noqa: ARG005
+        service.intake(
+            "github",
+            "https://github.com/example/neutral-repo",
+            "Agent memory workflow for research planning.",
+            0.78,
+            0.84,
+            "MIT",
+        ),
+        service.intake(
+            "github",
+            source_ref,
+            "Agent memory workflow for research planning.",
+            0.78,
+            0.84,
+            "MIT",
+        ),
+    ]
+    service._search_arxiv = lambda query, per_source: []  # noqa: ARG005
+
+    response = client.post("/scout/search-live", json={"query": "agent memory research workflow", "per_source": 3})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["source_ref"] == source_ref
+
+
 def test_local_worker_parses_file_blocks_without_end_marker(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     worker = client.app.state.services.local_worker
@@ -611,6 +648,151 @@ def answer() -> int:
         json={"approved_by": "human", "reason": "Still should fail."},
     )
     assert promote_again.status_code == 409
+
+
+def test_mutation_feedback_and_preflight_gate(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    _, program_id = create_seed_objects(client)
+
+    workspace = tmp_path / "preflight_workspace"
+    (workspace / "app").mkdir(parents=True)
+    (workspace / "tests").mkdir(parents=True)
+    (workspace / "app" / "logic.py").write_text("def answer() -> int:\n    return 0\n", encoding="utf-8")
+    (workspace / "tests" / "test_logic.py").write_text(
+        "from app.logic import answer\n\n\ndef test_answer() -> None:\n    assert answer() == 42\n",
+        encoding="utf-8",
+    )
+    (workspace / "app" / "__init__.py").write_text("", encoding="utf-8")
+
+    source_ref = "https://github.com/example/self-correcting-rag"
+    base_run = client.post(
+        f"/programs/{program_id}/runs",
+        json={
+            "task_type": "code",
+            "instructions": "Base mutation run for preflight validation.",
+            "command": "python -m pytest tests/test_logic.py -q",
+            "target_path": str(workspace),
+            "input_payload": {"meta_improvement_source_refs": [source_ref]},
+        },
+    ).json()
+    client.post(f"/runs/{base_run['id']}/start")
+
+    broken_response = """
+<<<SUMMARY>>>
+Break the function in a way that should fail preflight.
+<<<END SUMMARY>>>
+<<<FILE:app/logic.py>>>
+<<<<<<< SEARCH
+def answer() -> int:
+    return 0
+=======
+def answer() -> int
+    return 42
+>>>>>>> REPLACE
+<<<END FILE>>>
+""".strip()
+
+    def broken_side_effect(self: LocalWorker, prompt: str) -> str:
+        assert "Fault localization summary:" in prompt
+        assert "Prior failed mutation attempts to avoid repeating:" in prompt
+        return broken_response
+
+    with patch.object(LocalWorker, "_invoke_model", autospec=True, side_effect=broken_side_effect):
+        mutation = client.post(
+            "/mutation/jobs",
+            json={"run_id": base_run["id"], "strategy": "repair", "iterations": 1, "auto_stage": True},
+        )
+    assert mutation.status_code == 200
+    candidate_id = mutation.json()["candidate_run_ids"][0]
+    candidate = client.get(f"/runs/{candidate_id}").json()
+    assert candidate["status"] == "failed"
+    assert "Preflight failed" in candidate["result_summary"]
+
+    feedback = client.app.state.services.storage.get_scout_feedback(source_ref)
+    assert feedback is not None
+    assert feedback["mutation_failure_count"] >= 1
+    assert feedback["preflight_failure_count"] >= 1
+
+    artifacts = client.get("/artifacts?limit=100").json()
+    preflight = [item for item in artifacts if item["type"] == "mutation_preflight" and candidate_id in item["source_refs"]]
+    assert preflight
+    assert preflight[0]["payload"]["results"][0]["returncode"] != 0
+
+
+def test_mutation_success_and_promotion_update_source_feedback(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    _, program_id = create_seed_objects(client)
+
+    workspace = tmp_path / "source_feedback_workspace"
+    (workspace / "app").mkdir(parents=True)
+    (workspace / "tests").mkdir(parents=True)
+    (workspace / "app" / "logic.py").write_text("def answer() -> int:\n    return 0\n", encoding="utf-8")
+    (workspace / "tests" / "test_logic.py").write_text(
+        "from app.logic import answer\n\n\ndef test_answer() -> None:\n    assert answer() == 42\n",
+        encoding="utf-8",
+    )
+    (workspace / "app" / "__init__.py").write_text("", encoding="utf-8")
+
+    source_ref = "https://github.com/example/agent-memory"
+    base_run = client.post(
+        f"/programs/{program_id}/runs",
+        json={
+            "task_type": "code",
+            "instructions": "Base mutation run for source feedback.",
+            "command": "python -m pytest tests/test_logic.py -q",
+            "target_path": str(workspace),
+            "input_payload": {"meta_improvement_source_refs": [source_ref]},
+        },
+    ).json()
+    client.post(f"/runs/{base_run['id']}/start")
+
+    mutation_response = """
+<<<SUMMARY>>>
+Repair the logic module so the test expectation passes.
+<<<END SUMMARY>>>
+<<<FILE:app/logic.py>>>
+<<<<<<< SEARCH
+def answer() -> int:
+    return 0
+=======
+def answer() -> int:
+    return 42
+>>>>>>> REPLACE
+<<<END FILE>>>
+""".strip()
+
+    with patch.object(LocalWorker, "_invoke_model", autospec=True, return_value=mutation_response):
+        mutation = client.post(
+            "/mutation/jobs",
+            json={"run_id": base_run["id"], "strategy": "repair", "iterations": 1, "auto_stage": True},
+        )
+    candidate_id = mutation.json()["candidate_run_ids"][0]
+    candidate = client.get(f"/runs/{candidate_id}").json()
+    assert candidate["status"] == "ready_for_promotion"
+
+    feedback = client.app.state.services.storage.get_scout_feedback(source_ref)
+    assert feedback is not None
+    assert feedback["mutation_success_count"] >= 1
+
+    review = client.post(
+        f"/runs/{candidate_id}/review",
+        json={
+            "reviewer_type": "mutation_second_layer",
+            "model_tier": "frontier_auditor",
+            "decision": "approved",
+            "notes": "Scoped and safe.",
+            "confidence": 0.91,
+        },
+    )
+    assert review.status_code == 200
+    promote = client.post(
+        f"/mutation/candidates/{candidate_id}/promote",
+        json={"approved_by": "human", "reason": "Promote narrow safe mutation."},
+    )
+    assert promote.status_code == 200
+
+    feedback = client.app.state.services.storage.get_scout_feedback(source_ref)
+    assert feedback["promotion_count"] >= 1
 
 
 def test_advanced_organs_endpoints(tmp_path: Path) -> None:
