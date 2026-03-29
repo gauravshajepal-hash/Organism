@@ -192,3 +192,47 @@ def test_git_checkpoint_if_needed_reports_clean_noop_and_last_backup(tmp_path: P
     backup_state = client.get("/ops/git/backup-state")
     assert backup_state.status_code == 200
     assert backup_state.json()["reason"] == "initial-backup"
+
+
+def test_git_checkpoint_if_needed_pushes_clean_local_head_when_ahead_of_remote(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "README.md").write_text("seed\n", encoding="utf-8")
+
+    client.post("/ops/git/init", json={})
+    first = client.post("/ops/git/checkpoint", json={"reason": "initial-backup", "push": True})
+    assert first.status_code == 200
+    assert first.json()["status"] == "ok"
+
+    subprocess.run(["git", "-C", str(repo_root), "config", "user.name", "Local User"], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(repo_root), "config", "user.email", "local@example.com"], check=True, capture_output=True, text=True)
+    (repo_root / "README.md").write_text("seed\nlocal only\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo_root), "add", "README.md"], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(repo_root), "commit", "-m", "local only commit"], check=True, capture_output=True, text=True)
+
+    services = client.app.state.services
+    status_before = services.git_safety.status()
+    assert status_before["dirty"] is False
+    assert status_before["ahead"] == 1
+    assert status_before["needs_push"] is True
+
+    pushed = services.git_safety.checkpoint_if_needed("supervisor-cycle-pre", push=True)
+    assert pushed["status"] == "push_only_ok"
+    assert pushed["push_result"]["returncode"] == 0
+    assert pushed["ahead"] == 0
+    assert pushed["synced"] is True
+
+    remote_head = subprocess.run(
+        ["git", "--git-dir", str(tmp_path / "remote.git"), "rev-parse", "refs/heads/main"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    local_head = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert remote_head == local_head

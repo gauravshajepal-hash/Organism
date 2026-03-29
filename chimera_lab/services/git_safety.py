@@ -33,8 +33,14 @@ class GitSafetyService:
             "repo_exists": repo_exists,
             "remote_url": None,
             "branch": self.settings.git_branch,
+            "upstream": None,
             "head": None,
             "dirty": None,
+            "ahead": None,
+            "behind": None,
+            "needs_push": None,
+            "needs_pull": None,
+            "synced": None,
             "auto_push": self.settings.git_auto_push,
         }
         if not repo_exists:
@@ -43,6 +49,9 @@ class GitSafetyService:
         payload["branch"] = self._git_output(["rev-parse", "--abbrev-ref", "HEAD"]) or self.settings.git_branch
         payload["head"] = self._git_output(["rev-parse", "--short", "HEAD"])
         payload["dirty"] = bool(self._git_output(["status", "--porcelain"]))
+        payload["upstream"] = self._git_output(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+        divergence = self._branch_divergence(payload["branch"], payload["upstream"])
+        payload.update(divergence)
         return payload
 
     def ensure_repository(self, remote_url: str | None = None, branch: str | None = None) -> dict[str, Any]:
@@ -129,12 +138,17 @@ class GitSafetyService:
             return self.checkpoint(reason, push=push)
         if status.get("dirty"):
             return self.checkpoint(reason, push=push)
+        resolved_push = self.settings.git_auto_push if push is None else push
+        if resolved_push and self._needs_remote_sync(status):
+            return self._push_current_head(reason, status)
         last_backup = self.last_backup_state()
+        if resolved_push and self._backup_stale(last_backup):
+            return self._push_current_head(reason, status, verify_only=True)
         result = {
             "status": "clean_noop",
             "reason": reason,
             "commit": status.get("head"),
-            "pushed": bool(self.settings.git_auto_push if push is None else push),
+            "pushed": bool(resolved_push),
             "last_backup": last_backup,
             **status,
         }
@@ -216,6 +230,103 @@ class GitSafetyService:
         stdout = str(push_result.get("stdout") or "").lower()
         text = f"{stdout}\n{stderr}"
         return any(token in text for token in ["fetch first", "non-fast-forward", "rejected"])
+
+    def _branch_divergence(self, branch: str | None, upstream: str | None) -> dict[str, Any]:
+        remote_url = self._git_output(["remote", "get-url", "origin"])
+        result: dict[str, Any] = {
+            "ahead": None,
+            "behind": None,
+            "needs_push": None,
+            "needs_pull": None,
+            "synced": None,
+        }
+        if not remote_url or not branch:
+            return result
+
+        tracking_ref = upstream or f"origin/{branch}"
+        has_tracking = self._git(["rev-parse", "--verify", tracking_ref], check=False)
+        if has_tracking.returncode != 0:
+            result.update({"ahead": 0, "behind": 0, "needs_push": True, "needs_pull": False, "synced": False})
+            return result
+
+        counts = self._git_output(["rev-list", "--left-right", "--count", f"HEAD...{tracking_ref}"])
+        if not counts:
+            return result
+        parts = counts.split()
+        if len(parts) != 2:
+            return result
+        ahead = int(parts[0])
+        behind = int(parts[1])
+        result.update(
+            {
+                "ahead": ahead,
+                "behind": behind,
+                "needs_push": ahead > 0,
+                "needs_pull": behind > 0,
+                "synced": ahead == 0 and behind == 0,
+            }
+        )
+        return result
+
+    def _needs_remote_sync(self, status: dict[str, Any]) -> bool:
+        if not status.get("remote_url"):
+            return False
+        if status.get("needs_push") is True or status.get("needs_pull") is True:
+            return True
+        return bool(status.get("upstream") is None and status.get("head"))
+
+    def _backup_stale(self, last_backup: dict[str, Any] | None) -> bool:
+        if not last_backup:
+            return True
+        recorded_at = last_backup.get("recorded_at")
+        if not recorded_at:
+            return True
+        try:
+            last = datetime.fromisoformat(str(recorded_at))
+        except ValueError:
+            return True
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - last).total_seconds()
+        return age_seconds >= self.settings.git_backup_interval_seconds
+
+    def _push_current_head(self, reason: str, status: dict[str, Any], verify_only: bool = False) -> dict[str, Any]:
+        branch = status.get("branch") or self.settings.git_branch
+        remote = status.get("remote_url")
+        if not remote:
+            result = {"status": "push_failed", "reason": reason, "detail": "missing_remote_origin", **status}
+            self._record("git_checkpoint", result)
+            return result
+
+        pushed = self._git(["push", "-u", "origin", branch], check=False)
+        push_result = {
+            "returncode": pushed.returncode,
+            "stdout": pushed.stdout.strip(),
+            "stderr": pushed.stderr.strip(),
+        }
+        if pushed.returncode != 0 and self._needs_remote_reconcile(push_result):
+            push_result = self._reconcile_and_push()
+
+        refreshed = self.status()
+        if push_result.get("returncode") not in {0, None}:
+            status_value = "push_failed"
+        elif push_result.get("recovery"):
+            status_value = "push_reconciled"
+        else:
+            status_value = "push_verified" if verify_only else "push_only_ok"
+
+        result = {
+            "status": status_value,
+            "reason": reason,
+            "commit": refreshed.get("head"),
+            "pushed": True,
+            "push_result": push_result,
+            **refreshed,
+        }
+        if status_value in {"push_only_ok", "push_reconciled", "push_verified"}:
+            self._write_backup_state(result)
+        self._record("git_checkpoint", result)
+        return result
 
     def _reconcile_and_push(self) -> dict[str, Any]:
         branch = self.settings.git_branch
