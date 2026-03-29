@@ -3,90 +3,86 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Chimera Lab Research Dashboard</title>
+    <title>Chimera Lab</title>
     <meta
       name="description"
-      content="A one-way public dashboard for Chimera Lab's latest discoveries, concrete outputs, and negative results."
+      content="A simple public readout of what Chimera Lab is doing, what worked, what failed, and what it is reading."
     />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <main class="public-shell">
-      <header class="public-hero">
+      <header class="public-hero compact-hero">
         <div class="hero-copy">
           <p class="eyebrow">Chimera Lab</p>
-          <h1>Public Research Dashboard</h1>
+          <h1>What the organism is doing</h1>
           <p class="lede">
-            A static readout of the organism's current work: discoveries, successful outputs, negative results,
-            and the upstream research systems shaping the architecture.
+            This page is a read-only public summary. It explains, in plain English, what Chimera Lab has tried,
+            what worked, what failed, and what outside research it is paying attention to.
           </p>
-          <div class="hero-pills">
-            <span class="pill">Read only</span>
-            <span class="pill">One-way export</span>
-            <span class="pill">Public-safe bundle</span>
-          </div>
         </div>
         <nav class="nav-links">
-          <a href="./graph.html">Interactive Graph</a>
-          <a href="./papers/chimera-lab-research-synthesis.html">Research Paper</a>
-          <a href="https://github.com/gauravshajepal-hash/Organism" target="_blank" rel="noreferrer">GitHub Repo</a>
+          <a href="./graph.html">Map</a>
+          <a href="./papers/chimera-lab-research-synthesis.html">Paper</a>
+          <a href="https://github.com/gauravshajepal-hash/Organism" target="_blank" rel="noreferrer">GitHub</a>
         </nav>
       </header>
 
-      <section class="public-grid">
-        <article class="public-card">
-          <p class="card-kicker">Snapshot</p>
-          <h2>System Stats</h2>
-          <div id="statsGrid" class="stat-grid"></div>
+      <section class="public-grid compact-grid">
+        <article class="public-card wide">
+          <p class="card-kicker">Summary</p>
+          <h2>In plain English</h2>
+          <div id="plainEnglishSummary" class="public-list"></div>
         </article>
 
         <article class="public-card">
-          <p class="card-kicker">Live Output</p>
-          <h2>Latest Research</h2>
+          <p class="card-kicker">At a glance</p>
+          <h2>Quick facts</h2>
+          <div id="statsGrid" class="stat-grid"></div>
+        </article>
+      </section>
+
+      <section class="public-grid compact-grid">
+        <article class="public-card wide">
+          <p class="card-kicker">Recent work</p>
+          <h2>Latest runs</h2>
           <div id="latestResearch" class="public-list"></div>
         </article>
 
         <article class="public-card">
-          <p class="card-kicker">Discovery</p>
-          <h2>Top Discoveries</h2>
+          <p class="card-kicker">Current inputs</p>
+          <h2>What it is reading</h2>
           <div id="discoveries" class="public-list"></div>
         </article>
       </section>
 
-      <section class="public-grid">
-        <article class="public-card wide">
-          <p class="card-kicker">Concrete Output</p>
-          <h2>Positive Results</h2>
+      <section class="public-grid compact-grid">
+        <article class="public-card">
+          <p class="card-kicker">What worked</p>
+          <h2>Useful results</h2>
           <div id="positiveResults" class="public-list"></div>
         </article>
 
-        <article class="public-card wide">
-          <p class="card-kicker">Failure Record</p>
-          <h2>Negative Results</h2>
+        <article class="public-card">
+          <p class="card-kicker">What failed</p>
+          <h2>Problems and misses</h2>
           <div id="negativeResults" class="public-list"></div>
-        </article>
-      </section>
-
-      <section class="public-grid">
-        <article class="public-card wide">
-          <p class="card-kicker">Context</p>
-          <h2>Related Research</h2>
-          <div id="relatedWork" class="public-list"></div>
         </article>
 
         <article class="public-card">
-          <p class="card-kicker">Publication Contract</p>
-          <h2>Readout Mode</h2>
-          <div id="publicationMode" class="public-list"></div>
+          <p class="card-kicker">Outside ideas</p>
+          <h2>Related research</h2>
+          <div id="relatedWork" class="public-list"></div>
         </article>
       </section>
 
-      <footer class="public-footer">
-        <p>
-          This site is generated from organism state and published outward. It is not an operator console and it does
-          not send instructions back into Chimera Lab.
-        </p>
-      </footer>
+      <section class="public-grid compact-grid">
+        <article class="public-card wide">
+          <p class="card-kicker">About this site</p>
+          <h2>Publication mode</h2>
+          <div id="publicationMode" class="public-list"></div>
+        </article>
+      </section>
     </main>
     <script src="./dashboard.js" defer></script>
   </body>

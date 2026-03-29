@@ -3,27 +3,27 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Chimera Lab Interactive Graph</title>
+    <title>Chimera Lab Map</title>
     <meta
       name="description"
-      content="A read-only graph of Chimera Lab missions, runs, discoveries, artifacts, and related research."
+      content="A simple read-only map of Chimera Lab goals, runs, outputs, discoveries, and outside research."
     />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <main class="public-shell graph-shell">
-      <header class="public-hero">
+      <header class="public-hero compact-hero">
         <div class="hero-copy">
           <p class="eyebrow">Chimera Lab</p>
-          <h1>Interactive Research Graph</h1>
+          <h1>Simple map</h1>
           <p class="lede">
-            An Obsidian-like public map of missions, programs, runs, discoveries, artifacts, and related work.
+            This is a read-only map of the project. Click a node to see what it is and what it connects to.
           </p>
         </div>
         <nav class="nav-links">
-          <a href="./index.html">Dashboard</a>
-          <a href="./papers/chimera-lab-research-synthesis.html">Research Paper</a>
-          <a href="https://github.com/gauravshajepal-hash/Organism" target="_blank" rel="noreferrer">GitHub Repo</a>
+          <a href="./index.html">Home</a>
+          <a href="./papers/chimera-lab-research-synthesis.html">Paper</a>
+          <a href="https://github.com/gauravshajepal-hash/Organism" target="_blank" rel="noreferrer">GitHub</a>
         </nav>
       </header>
 
@@ -31,8 +31,8 @@
         <article class="public-card wide">
           <div class="graph-header">
             <div>
-              <p class="card-kicker">Knowledge Map</p>
-              <h2>Public Graph</h2>
+              <p class="card-kicker">Map</p>
+              <h2>Project graph</h2>
             </div>
             <div class="graph-legend" id="graphLegend"></div>
           </div>
@@ -40,12 +40,12 @@
         </article>
 
         <aside class="public-card detail-card">
-          <p class="card-kicker">Node Inspection</p>
-          <h2>Node Detail</h2>
+          <p class="card-kicker">Selected item</p>
+          <h2>Details</h2>
           <div id="graphDetail" class="public-list">
             <div class="public-item">
               <strong>No node selected</strong>
-              <p>Click a node to inspect its details and immediate connections.</p>
+              <p>Click any dot or box in the map.</p>
             </div>
           </div>
         </aside>

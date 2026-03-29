@@ -1,11 +1,11 @@
 const TYPE_COLORS = {
-  project: "#0f5c63",
-  mission: "#c48b2b",
-  program: "#1f7a54",
-  run: "#8a4122",
-  discovery: "#6b5bd0",
-  artifact: "#404854",
-  related_work: "#9f6a93",
+  project: "#155eef",
+  mission: "#c4320a",
+  program: "#067647",
+  run: "#7a5af8",
+  discovery: "#0e9384",
+  artifact: "#475467",
+  related_work: "#9e77ed",
 };
 
 const TYPE_COLUMNS = {
@@ -18,6 +18,16 @@ const TYPE_COLUMNS = {
   related_work: 6,
 };
 
+const TYPE_LABELS = {
+  project: "Project",
+  mission: "Goal",
+  program: "Plan",
+  run: "Run",
+  artifact: "Saved output",
+  discovery: "New idea",
+  related_work: "Outside research",
+};
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -27,8 +37,17 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function stripMarkdown(value) {
+  return String(value ?? "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/[*_#>\-\[\]\(\)\|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function nodeColor(type) {
-  return TYPE_COLORS[type] || "#66717c";
+  return TYPE_COLORS[type] || "#667085";
 }
 
 function buildLegend() {
@@ -37,7 +56,7 @@ function buildLegend() {
   Object.entries(TYPE_COLORS).forEach(([type, color]) => {
     const chip = document.createElement("div");
     chip.className = "legend-chip";
-    chip.innerHTML = `<span class="legend-swatch" style="background:${color}"></span><span>${escapeHtml(type.replaceAll("_", " "))}</span>`;
+    chip.innerHTML = `<span class="legend-swatch" style="background:${color}"></span><span>${escapeHtml(TYPE_LABELS[type] || type)}</span>`;
     legend.appendChild(chip);
   });
 }
@@ -120,7 +139,6 @@ function renderGraph(graph) {
     line.setAttribute("class", "graph-edge");
     line.dataset.source = edge.source;
     line.dataset.target = edge.target;
-    line.dataset.label = edge.label || "";
     edgeLayer.appendChild(line);
     edgeEls.push(line);
   });
@@ -135,19 +153,19 @@ function renderGraph(graph) {
 
     if (node.type === "artifact" || node.type === "run") {
       const rect = document.createElementNS(ns, "rect");
-      rect.setAttribute("x", "-46");
+      rect.setAttribute("x", "-48");
       rect.setAttribute("y", "-18");
-      rect.setAttribute("width", "92");
+      rect.setAttribute("width", "96");
       rect.setAttribute("height", "36");
-      rect.setAttribute("rx", "12");
+      rect.setAttribute("rx", "10");
       rect.setAttribute("fill", nodeColor(node.type));
-      rect.setAttribute("fill-opacity", "0.14");
+      rect.setAttribute("fill-opacity", "0.16");
       group.appendChild(rect);
     } else {
       const circle = document.createElementNS(ns, "circle");
-      circle.setAttribute("r", node.type === "project" ? "24" : "18");
+      circle.setAttribute("r", node.type === "project" ? "22" : "18");
       circle.setAttribute("fill", nodeColor(node.type));
-      circle.setAttribute("fill-opacity", node.type === "project" ? "0.3" : "0.18");
+      circle.setAttribute("fill-opacity", node.type === "project" ? "0.24" : "0.16");
       group.appendChild(circle);
     }
 
@@ -181,12 +199,12 @@ function renderGraph(graph) {
     detail.innerHTML = `
       <div class="public-item">
         <strong>${escapeHtml(node.label)}</strong>
-        <span class="public-meta">${escapeHtml(node.type.replaceAll("_", " "))}</span>
-        <p>${escapeHtml(node.details || "No details available.")}</p>
+        <span class="public-meta">${escapeHtml(TYPE_LABELS[node.type] || node.type)}</span>
+        <p>${escapeHtml(stripMarkdown(node.details || "No details available."))}</p>
       </div>
       <div class="public-item">
-        <strong>Connected Nodes</strong>
-        <p>${related.length ? related.map((item) => escapeHtml(item.label)).join(", ") : "No direct neighbors."}</p>
+        <strong>Connected to</strong>
+        <p>${related.length ? related.map((item) => escapeHtml(item.label)).join(", ") : "Nothing else is connected directly."}</p>
       </div>
     `;
   }
@@ -203,6 +221,6 @@ async function main() {
 main().catch((error) => {
   document.body.insertAdjacentHTML(
     "beforeend",
-    `<div class="public-error"><strong>Graph load failed</strong><p>${escapeHtml(error.message)}</p></div>`,
+    `<div class="public-error"><strong>Map load failed</strong><p>${escapeHtml(error.message)}</p></div>`,
   );
 });
