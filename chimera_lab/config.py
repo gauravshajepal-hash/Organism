@@ -41,6 +41,7 @@ class Settings:
     tree_search_depth: int
     tree_search_parallel_tracks: int
     tree_search_score_decay: float
+    git_secret_scan: bool
 
 
 def load_settings() -> Settings:
@@ -90,4 +91,5 @@ def load_settings() -> Settings:
         tree_search_depth=int(os.getenv("CHIMERA_TREE_SEARCH_DEPTH", "3")),
         tree_search_parallel_tracks=int(os.getenv("CHIMERA_TREE_SEARCH_PARALLEL_TRACKS", "3")),
         tree_search_score_decay=float(os.getenv("CHIMERA_TREE_SEARCH_SCORE_DECAY", "0.88")),
+        git_secret_scan=_env_flag("CHIMERA_GIT_SECRET_SCAN", True),
     )

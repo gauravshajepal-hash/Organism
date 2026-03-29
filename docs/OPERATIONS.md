@@ -9,6 +9,17 @@ pip install -e .[dev]
 uvicorn chimera_lab.app:create_app --factory --reload
 ```
 
+Recommended local-first mode on this machine:
+
+```powershell
+$env:CHIMERA_ENABLE_OLLAMA="1"
+$env:CHIMERA_LOCAL_MODEL="qwen3.5:9b"
+$env:CHIMERA_FRONTIER_PROVIDER="manual"
+uvicorn chimera_lab.app:create_app --factory --reload
+```
+
+That avoids cloud calls entirely. `OPENAI_API_KEY` and `GEMINI_API_KEY` are optional and only needed for automated frontier planning/audit.
+
 Open:
 
 - local UI: `http://127.0.0.1:8000`
@@ -81,6 +92,13 @@ The organism also checkpoints automatically on:
 - mutation promotion
 - public export
 - recorded crashes where a push attempt is possible
+
+Checkpoint hardening:
+
+- `.env`, `.env.*`, `secrets/`, `credentials/`, and key/cert files are ignored by default
+- checkpoints are blocked if staged files look secret-bearing
+- checkpoints are blocked if staged diffs contain obvious API-key or bearer-token patterns
+- use shell or OS-level environment variables for live keys, not tracked repo files
 
 ## Failure Handling
 

@@ -69,6 +69,11 @@ class GitSafetyService:
 
         self._ensure_identity()
         self._git(["add", "-A"], check=True)
+        if self.settings.git_secret_scan:
+            secret_gate = self._secret_gate(reason)
+            if secret_gate is not None:
+                self._record("git_checkpoint", secret_gate)
+                return secret_gate
         dirty = self._git(["diff", "--cached", "--quiet"], check=False)
         commit_hash = self._git_output(["rev-parse", "--short", "HEAD"])
 
@@ -176,3 +181,73 @@ class GitSafetyService:
             "stderr": pushed.stderr.strip(),
             "recovery": "fetch_rebase_retry",
         }
+
+    def _secret_gate(self, reason: str) -> dict[str, Any] | None:
+        staged_files = self._staged_files()
+        blocked_files = [path for path in staged_files if self._is_sensitive_path(path)]
+        findings = self._secret_findings()
+        if not blocked_files and not findings:
+            return None
+
+        self._unstage_all()
+        return {
+            "status": "blocked_secret_scan",
+            "reason": reason,
+            "detail": "checkpoint_blocked_by_secret_scan",
+            "blocked_files": blocked_files,
+            "secret_findings": findings,
+            **self.status(),
+        }
+
+    def _staged_files(self) -> list[str]:
+        result = self._git(["diff", "--cached", "--name-only", "--diff-filter=ACMR"], check=False)
+        if result.returncode != 0:
+            return []
+        return [line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()]
+
+    def _is_sensitive_path(self, path: str) -> bool:
+        normalized = path.strip().replace("\\", "/")
+        lower = normalized.lower()
+        name = Path(lower).name
+        if name == ".env":
+            return True
+        if name.startswith(".env.") and name != ".env.example":
+            return True
+        if lower.startswith("secrets/") or "/secrets/" in lower or lower.startswith(".secrets/") or "/.secrets/" in lower:
+            return True
+        if lower.startswith("credentials/") or "/credentials/" in lower:
+            return True
+        if name in {"credentials.json", "secrets.json", ".npmrc", ".pypirc", ".netrc", ".envrc"}:
+            return True
+        return Path(lower).suffix in {".pem", ".key", ".p12", ".pfx", ".crt", ".cer", ".mobileprovision", ".secret"}
+
+    def _secret_findings(self) -> list[dict[str, str]]:
+        result = self._git(["diff", "--cached", "--no-color", "--unified=0"], check=False)
+        if result.returncode != 0:
+            return []
+        text = result.stdout
+        patterns = [
+            ("openai_key", re.compile(r"sk-[A-Za-z0-9]{20,}")),
+            ("gemini_key", re.compile(r"AIza[0-9A-Za-z\\-_]{20,}")),
+            ("github_pat", re.compile(r"github_pat_[A-Za-z0-9_]{20,}")),
+            ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}")),
+            ("bearer_token", re.compile(r"Bearer\\s+[A-Za-z0-9._-]{20,}", re.IGNORECASE)),
+            ("openai_env", re.compile(r"OPENAI_API_KEY\\s*[:=]\\s*['\\\"]?[A-Za-z0-9_-]{16,}", re.IGNORECASE)),
+            ("gemini_env", re.compile(r"GEMINI_API_KEY\\s*[:=]\\s*['\\\"]?[A-Za-z0-9_-]{16,}", re.IGNORECASE)),
+        ]
+        findings: list[dict[str, str]] = []
+        for label, pattern in patterns:
+            match = pattern.search(text)
+            if match:
+                findings.append({"type": label, "snippet": self._redact_secret_snippet(match.group(0))})
+        return findings
+
+    def _redact_secret_snippet(self, value: str) -> str:
+        if len(value) <= 12:
+            return "***"
+        return value[:4] + "***" + value[-4:]
+
+    def _unstage_all(self) -> None:
+        reset = self._git(["reset"], check=False)
+        if reset.returncode != 0:
+            self._git(["rm", "-r", "--cached", "."], check=False)

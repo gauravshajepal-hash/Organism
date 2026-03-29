@@ -143,3 +143,31 @@ def test_git_checkpoint_reconciles_non_fast_forward_push(tmp_path: Path) -> None
         text=True,
     ).stdout.strip()
     assert remote_head == local_head
+
+
+def test_git_checkpoint_blocks_secret_files_and_tokens(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "README.md").write_text("seed\n", encoding="utf-8")
+
+    client.post("/ops/git/init", json={})
+    first = client.post("/ops/git/checkpoint", json={"reason": "initial-backup", "push": True})
+    assert first.status_code == 200
+    assert first.json()["status"] == "ok"
+
+    (repo_root / ".env").write_text("OPENAI_API_KEY=dummy_openai_secret_value_1234567890\n", encoding="utf-8")
+    blocked = client.post("/ops/git/checkpoint", json={"reason": "dangerous-backup", "push": True})
+    assert blocked.status_code == 200
+    payload = blocked.json()
+    assert payload["status"] == "blocked_secret_scan"
+    assert ".env" in payload["blocked_files"]
+    assert payload["secret_findings"]
+
+    staged = subprocess.run(
+        ["git", "-C", str(repo_root), "diff", "--cached", "--name-only"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert ".env" not in staged

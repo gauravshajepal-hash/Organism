@@ -178,6 +178,32 @@ uvicorn chimera_lab.app:create_app --factory --reload
 
 Open the local operator UI at [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
+### Recommended Local Run Mode
+
+You do not need cloud API keys to run the organism locally.
+
+PowerShell:
+
+```powershell
+$env:CHIMERA_ENABLE_OLLAMA="1"
+$env:CHIMERA_LOCAL_MODEL="qwen3.5:9b"
+$env:CHIMERA_FRONTIER_PROVIDER="manual"
+uvicorn chimera_lab.app:create_app --factory --reload
+```
+
+That uses the local worker only and keeps frontier planning/audit in manual mode.
+
+### When API Keys Are Actually Needed
+
+You only need `OPENAI_API_KEY` or `GEMINI_API_KEY` if you want automated frontier planning or auditing.
+
+Recommended practice:
+
+- set keys in your shell session or Windows user environment
+- do not put live keys in tracked files
+- do not put live keys in `.env` files inside this repo
+- keep `CHIMERA_FRONTIER_PROVIDER=manual` unless you explicitly want automated cloud review
+
 ## Export the Public Site
 
 Generate the GitHub-facing research bundle:
@@ -222,6 +248,7 @@ It deploys the `docs/` directory as a static site on pushes to `main` or `master
 - `CHIMERA_GIT_REMOTE_URL`: remote repository URL, defaults to `https://github.com/gauravshajepal-hash/Organism.git`
 - `CHIMERA_GIT_BRANCH`: push branch, defaults to `main`
 - `CHIMERA_GIT_AUTOPUSH`: enable automatic git push checkpoints
+- `CHIMERA_GIT_SECRET_SCAN`: block checkpoints when staged files or staged diffs look secret-bearing
 - `CHIMERA_LOCAL_RETRY_LIMIT`: retry-command fan-out for local runs
 - `CHIMERA_SCOUT_SEEDS`: comma-separated scout seed URLs
 - `CHIMERA_MUTATION_MAX_FILES`: maximum edited files before quarantine
@@ -244,6 +271,7 @@ It deploys the `docs/` directory as a static site on pushes to `main` or `master
 - runtime events and crashes are journaled under `data/runtime`
 - the next startup can inspect the latest crash and recent events
 - important outward-facing checkpoints can auto-commit and push
+- secret-bearing files and obvious staged credentials are blocked before checkpoint commit/push
 - public export is outward-only and redacted
 
 ## Verification
