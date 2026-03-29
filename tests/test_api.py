@@ -259,6 +259,35 @@ def test_live_scout_search_softly_downranks_legal_noise(tmp_path: Path) -> None:
         )
     ]
 
+
+def test_local_worker_parses_file_blocks_without_end_marker(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    worker = client.app.state.services.local_worker
+    plan = worker._parse_diff_plan(  # noqa: SLF001
+        "\n".join(
+            [
+                "<<<SUMMARY>>>",
+                "Tighten the gate.",
+                "<<<END SUMMARY>>>",
+                "<<<FILE:chimera_lab/services/run_automation.py>>>",
+                "<<<<<<< SEARCH",
+                "old value",
+                "=======",
+                "new value",
+                ">>>>>>> REPLACE",
+            ]
+        ),
+        operator="repair",
+    )
+
+    assert plan["summary"] == "Tighten the gate."
+    assert plan["edits"] == [
+        {
+            "path": "chimera_lab/services/run_automation.py",
+            "replacements": [{"search": "old value", "replace": "new value"}],
+        }
+    ]
+
     response = client.post("/scout/search-live", json={"query": "agent memory research workflow", "per_source": 3})
     assert response.status_code == 200
     payload = response.json()

@@ -77,7 +77,7 @@ class LocalWorker:
                         {"role": "user", "content": prompt},
                     ],
                 },
-                timeout=120,
+                timeout=self.settings.ollama_timeout_seconds,
             )
             response.raise_for_status()
             data = response.json()
@@ -177,7 +177,11 @@ class LocalWorker:
         summary = summary_match.group(1).strip() if summary_match else f"Model mutation plan for {operator}."
         edits: list[dict[str, Any]] = []
 
-        for file_match in re.finditer(r"<<<FILE:(.*?)>>>\s*(.*?)\s*<<<END FILE>>>", text, re.DOTALL):
+        for file_match in re.finditer(
+            r"<<<FILE:(.*?)>>>\s*(.*?)(?=(?:\s*<<<END FILE>>>)|(?:\s*<<<FILE:)|\Z)",
+            text,
+            re.DOTALL,
+        ):
             path = file_match.group(1).strip()
             body = file_match.group(2)
             replacements = []

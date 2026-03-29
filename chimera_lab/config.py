@@ -24,6 +24,7 @@ class Settings:
     git_auto_push: bool
     ollama_url: str
     local_model: str
+    ollama_timeout_seconds: int
     enable_ollama: bool
     sandbox_mode: str
     frontier_provider: str
@@ -84,6 +85,7 @@ def load_settings() -> Settings:
         git_auto_push=_env_flag("CHIMERA_GIT_AUTOPUSH", True),
         ollama_url=os.getenv("CHIMERA_OLLAMA_URL", "http://127.0.0.1:11434"),
         local_model=os.getenv("CHIMERA_LOCAL_MODEL", "qwen2.5-coder:7b"),
+        ollama_timeout_seconds=int(os.getenv("CHIMERA_OLLAMA_TIMEOUT_SECONDS", "240")),
         enable_ollama=_env_flag("CHIMERA_ENABLE_OLLAMA", True),
         sandbox_mode=os.getenv("CHIMERA_SANDBOX_MODE", "local").strip().lower(),
         frontier_provider=os.getenv("CHIMERA_FRONTIER_PROVIDER", "manual").strip().lower(),

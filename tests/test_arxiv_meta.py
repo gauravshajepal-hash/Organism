@@ -6,6 +6,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from chimera_lab.app import create_app
+from chimera_lab.services.sandbox_runner import SandboxRunner
 
 
 def make_client(tmp_path: Path) -> TestClient:
@@ -148,3 +149,18 @@ def test_execute_meta_improvement_creates_mutation_job(tmp_path: Path) -> None:
     run_payload = run.json()
     assert run_payload["input_payload"]["meta_improvement_session_id"] == session["id"]
     assert run_payload["input_payload"]["mutation_candidate_files"]
+
+
+def test_prepare_worktree_ignores_nested_worktrees(tmp_path: Path) -> None:
+    source = tmp_path / "repo"
+    source.mkdir()
+    (source / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    worktrees = source / "data" / "worktrees"
+    worktrees.mkdir(parents=True)
+    (worktrees / "stale.txt").write_text("ignore me\n", encoding="utf-8")
+
+    runner = SandboxRunner(mode="local", worktrees_dir=worktrees)
+    destination = runner.prepare_worktree(str(source), "candidate")
+
+    assert (destination / "main.py").read_text(encoding="utf-8") == "print('ok')\n"
+    assert not (destination / "data" / "worktrees").exists()

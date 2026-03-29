@@ -70,5 +70,29 @@ class SandboxRunner:
         destination = self.worktrees_dir / label
         if destination.exists():
             shutil.rmtree(destination)
-        shutil.copytree(source, destination, dirs_exist_ok=False)
+        shutil.copytree(source, destination, dirs_exist_ok=False, ignore=self._copy_ignore(source))
         return destination
+
+    def _copy_ignore(self, source_root: Path):  # type: ignore[no-untyped-def]
+        def ignore(directory: str, names: list[str]) -> set[str]:
+            ignored: set[str] = set()
+            for name in names:
+                candidate = (Path(directory) / name).resolve()
+                if self._is_within(candidate, self.worktrees_dir):
+                    ignored.add(name)
+                    continue
+                if candidate.name in {"__pycache__", ".pytest_cache", ".mypy_cache"}:
+                    ignored.add(name)
+                    continue
+                if candidate.name == ".git" and candidate.parent == source_root:
+                    ignored.add(name)
+            return ignored
+
+        return ignore
+
+    def _is_within(self, path: Path, parent: Path) -> bool:
+        try:
+            path.relative_to(parent.resolve())
+            return True
+        except ValueError:
+            return False
