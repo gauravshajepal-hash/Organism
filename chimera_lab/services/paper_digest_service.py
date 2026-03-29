@@ -14,7 +14,7 @@ import httpx
 from chimera_lab.config import Settings
 from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.memory_tiers import MemoryTierOrchestrator
-from chimera_lab.services.scout_service import ScoutService
+from chimera_lab.services.scout_service import ScoutService, canonicalize_source_ref
 
 
 def _slug(value: str) -> str:
@@ -160,6 +160,7 @@ class PaperDigestService:
             return result
 
     def digest_paper(self, source_ref: str, pdf_url: str | None = None, title: str | None = None, force: bool = False) -> dict[str, Any]:
+        source_ref = canonicalize_source_ref(source_ref)
         digests = self._load_json(self.digests_path, {})
         digest_key = _slug(source_ref)
         if not force and digest_key in digests:
@@ -235,7 +236,7 @@ class PaperDigestService:
                 {
                     "id": f"paper_{_slug(abs_url)}",
                     "source_type": "paper",
-                    "source_ref": abs_url,
+                    "source_ref": canonicalize_source_ref(abs_url),
                     "title": title,
                     "summary": summary or title,
                     "novelty_score": novelty_score,
@@ -295,7 +296,7 @@ class PaperDigestService:
         results: list[dict[str, Any]] = []
         for match in re.finditer(r"\[([^\]]+)\]\((https://arxiv\.org/abs/[^)]+)\)", text):
             title = re.sub(r"\s+", " ", match.group(1)).strip()
-            abs_url = match.group(2).strip()
+            abs_url = canonicalize_source_ref(match.group(2).strip())
             line = self._readme_line(text, match.start())
             score = self.scout_service._query_relevance(f"{title} {line}".lower(), query)  # noqa: SLF001
             if score < 0.18:

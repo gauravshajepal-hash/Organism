@@ -139,9 +139,12 @@ class LocalWorker:
 
     def plan_mutation(self, mission: dict | None, program: dict | None, run: dict, operator: str, worktree_path: str) -> dict[str, Any]:
         localization = self.build_fault_localization(run, worktree_path)
-        file_context = localization["file_context"]
+        editable_files = self._editable_files_for_operator(localization["selected_files"], localization["focused_tests"], operator)
+        file_context = self._render_file_context(Path(worktree_path), editable_files) if editable_files else localization["file_context"]
         selection_rationale = localization["selection_rationale"]
-        selected_files = localization["selected_files"]
+        if editable_files:
+            selection_rationale = f"{selection_rationale}; editable scope for {operator}: {', '.join(editable_files)}"
+        selected_files = editable_files or localization["selected_files"]
         payload = run.get("input_payload") or {}
         negative_memory = payload.get("mutation_negative_memory") or []
         prompt = "\n".join(
@@ -170,6 +173,9 @@ class LocalWorker:
                 "Rules:",
                 "- Edit only listed files.",
                 "- SEARCH content must match exactly.",
+                "- Default to a single FILE block on the highest-priority source file.",
+                "- Only touch multiple files if the focused test cannot possibly pass otherwise.",
+                "- Prefer the smallest possible replacement over broad rewrites.",
                 "- Use one or more FILE blocks if needed.",
                 "- No markdown fences and no prose outside the required blocks.",
                 f"Editable file snapshots:\n{file_context}",
@@ -245,11 +251,13 @@ class LocalWorker:
         files, rationale = self._select_mutation_files(path, preferred, run, failure_context)
         if not files:
             return "No editable files discovered.", rationale, []
+        selected_files = [file_path.relative_to(path).as_posix() for file_path in files]
+        return self._render_file_context(path, selected_files), rationale, selected_files
+
+    def _render_file_context(self, root: Path, selected_files: list[str]) -> str:
         sections = []
-        selected_files: list[str] = []
-        for file_path in files:
-            relative = file_path.relative_to(path).as_posix()
-            selected_files.append(relative)
+        for relative in selected_files:
+            file_path = root / relative
             content = file_path.read_text(encoding="utf-8", errors="ignore")
             sections.append(
                 "\n".join(
@@ -260,7 +268,20 @@ class LocalWorker:
                     ]
                 )
             )
-        return "\n\n".join(sections), rationale, selected_files
+        return "\n\n".join(sections)
+
+    def _editable_files_for_operator(self, selected_files: list[str], focused_tests: list[str], operator: str) -> list[str]:
+        if not selected_files:
+            return []
+        lower_operator = operator.lower()
+        max_files = min(self.settings.mutation_max_files, 3)
+        if any(token in lower_operator for token in {"repair", "simplify", "stabilize", "diagnose"}):
+            max_files = 1
+        elif any(token in lower_operator for token in {"exploit", "optimize", "tighten"}):
+            max_files = min(max_files, 2)
+        source_files = [path for path in selected_files if path not in focused_tests]
+        ordered = source_files + [path for path in selected_files if path not in source_files]
+        return ordered[:max_files]
 
     def _select_mutation_files(self, root: Path, preferred: list[str], run: dict, failure_context: str) -> tuple[list[Path], str]:
         if not root.exists():

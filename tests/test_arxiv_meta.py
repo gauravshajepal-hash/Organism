@@ -217,15 +217,17 @@ def test_execute_meta_improvement_creates_mutation_job(tmp_path: Path) -> None:
 
 def test_meta_improvement_execution_infers_source_refs_and_records_feedback(tmp_path: Path) -> None:
     client = make_client(tmp_path)
+    pdf_source_ref = "https://arxiv.org/pdf/2601.21403v1"
+    canonical_source_ref = "https://arxiv.org/abs/2601.21403"
     client.post(
         "/scout/intake",
         json={
-            "source_type": "github",
-            "source_ref": "https://github.com/example/source-quality",
-            "summary": "Source grading self correction patterns for scout reliability and evidence quality.",
+            "source_type": "paper",
+            "source_ref": pdf_source_ref,
+            "summary": "Source grading self correction patterns for scout reliability and evidence quality in agent memory systems.",
             "novelty_score": 0.82,
             "trust_score": 0.84,
-            "license": "MIT",
+            "license": "arXiv",
         },
     )
     session = client.post(
@@ -254,14 +256,28 @@ def test_meta_improvement_execution_infers_source_refs_and_records_feedback(tmp_
     )
     assert response.status_code == 200
     payload = response.json()
-    assert "https://github.com/example/source-quality" in payload["source_refs"]
+    assert canonical_source_ref in payload["source_refs"]
+    assert pdf_source_ref not in payload["source_refs"]
 
     run = client.get(f"/runs/{payload['base_run_id']}").json()
-    assert "https://github.com/example/source-quality" in run["input_payload"]["meta_improvement_source_refs"]
+    assert canonical_source_ref in run["input_payload"]["meta_improvement_source_refs"]
+    assert pdf_source_ref not in run["input_payload"]["meta_improvement_source_refs"]
 
-    feedback = client.app.state.services.storage.get_scout_feedback("https://github.com/example/source-quality")
+    feedback = client.app.state.services.storage.get_scout_feedback(canonical_source_ref)
     assert feedback is not None
     assert feedback["staged_count"] >= 1
+
+
+def test_scout_query_plan_softly_expands_cross_domain_architecture_terms(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    plan = client.app.state.services.scout_service.build_query_plan(
+        "Could Chimera discover post-transformer architectures from biology and statistical physics?"
+    )
+
+    expanded_terms = set(plan["expanded_query"].split())
+    assert "transformer" in plan["compact_query"]
+    assert "architecture" in expanded_terms or "architectures" in expanded_terms
+    assert {"biology", "physics", "statistical_physics"} & expanded_terms
 
 
 def test_prepare_worktree_ignores_nested_worktrees(tmp_path: Path) -> None:

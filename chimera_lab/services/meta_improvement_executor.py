@@ -10,6 +10,7 @@ from chimera_lab.db import Storage
 from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.mutation_lab import MutationLab
 from chimera_lab.services.research_evolution import ResearchEvolutionLab
+from chimera_lab.services.scout_service import canonicalize_source_ref
 
 
 @dataclass(slots=True)
@@ -112,10 +113,10 @@ class MetaImprovementExecutor:
         for artifact in self.artifact_store.list_for_source_ref(session_id, limit=50):
             for source_ref in artifact.get("source_refs", []):
                 if source_ref and source_ref != session_id and not source_ref.startswith(("meta_", "artifact_", "mission_", "program_", "run_", "mutation_")):
-                    refs.append(str(source_ref))
+                    refs.append(canonicalize_source_ref(str(source_ref)))
         if not refs and session:
             refs.extend(self._infer_source_refs(session))
-        return list(dict.fromkeys(refs))[:10]
+        return list(dict.fromkeys(canonicalize_source_ref(ref) for ref in refs if ref))[:10]
 
     def _infer_source_refs(self, session: dict[str, Any]) -> list[str]:
         tokens = self._keyword_tokens(" ".join([str(session.get("target") or ""), str(session.get("objective") or "")]))
@@ -135,7 +136,7 @@ class MetaImprovementExecutor:
             trust = float(candidate.get("trust_score") or 0.5)
             novelty = float(candidate.get("novelty_score") or 0.5)
             score = (overlap / max(1, len(tokens))) * 0.7 + trust * 0.2 + novelty * 0.1
-            scored.append((score, str(candidate["source_ref"])))
+            scored.append((score, canonicalize_source_ref(str(candidate["source_ref"]))))
         scored.sort(key=lambda item: (-item[0], item[1]))
         return [source_ref for _, source_ref in scored[:5]]
 

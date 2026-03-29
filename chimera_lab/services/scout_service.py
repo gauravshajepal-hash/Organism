@@ -14,6 +14,20 @@ from chimera_lab.db import Storage
 from chimera_lab.services.artifact_store import ArtifactStore
 
 
+def canonicalize_source_ref(source_ref: str) -> str:
+    normalized = (source_ref or "").strip()
+    if "arxiv.org" not in normalized:
+        return normalized
+    match = re.search(r"arxiv\.org/(?:abs|pdf)/([^?#]+)", normalized)
+    if not match:
+        return normalized
+    identifier = match.group(1)
+    if identifier.endswith(".pdf"):
+        identifier = identifier[:-4]
+    identifier = re.sub(r"v\d+$", "", identifier)
+    return f"https://arxiv.org/abs/{identifier}"
+
+
 class ScoutService:
     def __init__(self, settings: Settings, storage: Storage, artifact_store: ArtifactStore) -> None:
         self.settings = settings
@@ -21,7 +35,14 @@ class ScoutService:
         self.artifact_store = artifact_store
 
     def intake(self, source_type: str, source_ref: str, summary: str, novelty_score: float, trust_score: float, license_: str | None) -> dict:
-        return self.storage.create_or_update_scout_candidate(source_type, source_ref, summary, novelty_score, trust_score, license_)
+        return self.storage.create_or_update_scout_candidate(
+            source_type,
+            canonicalize_source_ref(source_ref),
+            summary,
+            novelty_score,
+            trust_score,
+            license_,
+        )
 
     def list(self) -> list[dict]:
         return self.storage.list_scout_candidates()
@@ -262,6 +283,9 @@ class ScoutService:
             "improving": ["improvement", "iteration"],
             "loops": ["repair", "evaluation"],
             "loop": ["repair", "evaluation"],
+            "architecture": ["collective", "dynamics", "biology"],
+            "attention": ["active_matter", "physics", "collective_behavior"],
+            "transformer": ["statistical_physics", "dynamical_systems", "biology"],
         }
         expanded: list[str] = []
         seen: set[str] = set()
@@ -270,6 +294,10 @@ class ScoutService:
                 if related not in seen and related not in compact_terms:
                     seen.add(related)
                     expanded.append(related)
+        for related in self._cross_domain_terms(compact_terms):
+            if related not in seen and related not in compact_terms:
+                seen.add(related)
+                expanded.append(related)
         return expanded[:8]
 
     def _rank_live_results(self, query: str, results: list[dict], limit: int) -> list[dict]:
@@ -291,9 +319,10 @@ class ScoutService:
         return round(score, 4)
 
     def _feedback_signal(self, source_ref: str) -> float:
-        if not source_ref:
+        normalized_source_ref = canonicalize_source_ref(source_ref)
+        if not normalized_source_ref:
             return 0.0
-        feedback = self.storage.get_scout_feedback(source_ref)
+        feedback = self.storage.get_scout_feedback(normalized_source_ref)
         if not feedback:
             return 0.0
         referenced = float(feedback.get("referenced_count", 0))
@@ -362,12 +391,29 @@ class ScoutService:
             "mutation": ["repair", "variation", "patch"],
             "repo": ["github", "repository", "tooling"],
             "scout": ["feed", "signal", "discover"],
+            "architecture": ["biology", "physics", "collective", "dynamics"],
+            "attention": ["active", "matter", "collective", "dynamics"],
+            "transformer": ["physics", "biology", "systems"],
         }
         for token in tokens:
             for related in soft_map.get(token, []):
                 if related in text:
                     expanded += 1
         return min(1.0, (direct / max(1, len(tokens))) + min(expanded, 3) * 0.1)
+
+    def _cross_domain_terms(self, compact_terms: list[str]) -> list[str]:
+        trigger_terms = {"architecture", "attention", "transformer", "memory", "agent", "agents", "self", "improving", "research"}
+        if not trigger_terms.intersection(set(compact_terms)):
+            return []
+        return [
+            "biology",
+            "physics",
+            "statistical_physics",
+            "active_matter",
+            "collective_behavior",
+            "dynamical_systems",
+            "astronomy",
+        ]
 
     def _noise_penalty(self, text: str) -> float:
         noisy = {

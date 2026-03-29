@@ -8,6 +8,7 @@ from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.mutation_guardrails import MutationGuardrails
 from chimera_lab.services.local_worker import LocalWorker
 from chimera_lab.services.sandbox_runner import SandboxRunner
+from chimera_lab.services.scout_service import canonicalize_source_ref
 
 
 class MutationLab:
@@ -192,12 +193,43 @@ class MutationLab:
             created_by="mutation_lab",
         )
         if target_path and not applied_edits:
-            summary = plan["summary"]
-            if apply_errors:
-                summary = f"{summary} No diff blocks applied."
-            self.storage.update_task_run(candidate["id"], status="failed", result_summary=summary[:500])
-            self._record_source_feedback(source_refs, event="mutation_apply_failed", mutation_failure_count=1, noisy_count=1)
-            return
+            repair_attempt = self._attempt_apply_repair(
+                mission,
+                program,
+                candidate,
+                operator,
+                plan,
+                source_refs,
+                apply_errors,
+            )
+            if repair_attempt is not None:
+                plan = repair_attempt["plan"]
+                applied_edits = repair_attempt["applied_edits"]
+                apply_errors = repair_attempt["apply_errors"]
+                self.artifact_store.create(
+                    "mutation_candidate",
+                    {
+                        "candidate_run_id": candidate["id"],
+                        "operator": f"{operator}_apply_repair",
+                        "summary": plan["summary"],
+                        "applied_edits": applied_edits,
+                        "apply_errors": apply_errors,
+                        "raw_response": plan.get("raw_response", ""),
+                        "selected_files": plan.get("selected_files", []),
+                        "selection_rationale": plan.get("selection_rationale", ""),
+                        "generated_by": (candidate.get("input_payload") or {}).get("mutation_generated_by", "mutation_generator"),
+                        "generator_model_tier": (candidate.get("input_payload") or {}).get("mutation_generator_model_tier", "local_executor"),
+                    },
+                    source_refs=[candidate["id"], *source_refs],
+                    created_by="mutation_lab",
+                )
+            else:
+                summary = plan["summary"]
+                if apply_errors:
+                    summary = f"{summary} No diff blocks applied."
+                self.storage.update_task_run(candidate["id"], status="failed", result_summary=summary[:500])
+                self._record_source_feedback(source_refs, event="mutation_apply_failed", mutation_failure_count=1, noisy_count=1)
+                return
         preflight_results = self._run_preflight(candidate, plan, applied_edits)
         failed_preflight = next((result for result in preflight_results if result.get("returncode") != 0), None)
         repaired = False
@@ -433,7 +465,64 @@ class MutationLab:
         return {
             "plan": repair_plan,
             "applied_edits": applied_edits + repair_applied,
+            "apply_errors": repair_errors,
             "preflight_results": repair_preflight,
+        }
+
+    def _attempt_apply_repair(
+        self,
+        mission: dict | None,
+        program: dict | None,
+        candidate: dict,
+        operator: str,
+        plan: dict,
+        source_refs: list[str],
+        apply_errors: list[str],
+    ) -> dict | None:
+        target_path = candidate.get("target_path")
+        if not target_path:
+            return None
+        payload = dict(candidate.get("input_payload") or {})
+        existing_negative = list(payload.get("mutation_negative_memory") or [])
+        repair_run = dict(candidate)
+        repair_run["instructions"] = (
+            f"{candidate['instructions']}\n"
+            "The previous patch did not apply. Produce one smallest possible corrective diff using an exact SEARCH block from the editable file snapshot."
+        )
+        repair_run["input_payload"] = {
+            **payload,
+            "mutation_failure_output": "\n".join(apply_errors)[:4000],
+            "mutation_negative_memory": [
+                *existing_negative[:3],
+                f"{operator}: no diff blocks applied -> {'; '.join(apply_errors[:3])}",
+            ],
+        }
+        repair_plan = self.local_worker.plan_mutation(mission, program, repair_run, f"{operator}_apply_repair", target_path)
+        repair_applied, repair_errors = self._apply_edits(
+            Path(target_path),
+            repair_plan["edits"],
+            allowed_paths=repair_plan.get("selected_files", []),
+        )
+        self.artifact_store.create(
+            "mutation_apply_repair",
+            {
+                "candidate_run_id": candidate["id"],
+                "summary": repair_plan["summary"],
+                "selected_files": repair_plan.get("selected_files", []),
+                "selection_rationale": repair_plan.get("selection_rationale", ""),
+                "apply_errors": repair_errors,
+                "applied_edits": repair_applied,
+                "raw_response": repair_plan.get("raw_response", ""),
+            },
+            source_refs=[candidate["id"], *source_refs],
+            created_by="mutation_lab",
+        )
+        if not repair_applied:
+            return None
+        return {
+            "plan": repair_plan,
+            "applied_edits": repair_applied,
+            "apply_errors": repair_errors,
         }
 
     def _preflight_commands(self, candidate: dict, plan: dict, applied_edits: list[dict]) -> list[str]:
@@ -481,12 +570,12 @@ class MutationLab:
 
     def _mutation_source_refs(self, candidate: dict) -> list[str]:
         payload = candidate.get("input_payload") or {}
-        refs = [str(item).strip() for item in (payload.get("mutation_source_refs") or []) if str(item).strip()]
+        refs = [canonicalize_source_ref(str(item).strip()) for item in (payload.get("mutation_source_refs") or []) if str(item).strip()]
         return list(dict.fromkeys(refs))
 
     def _record_source_feedback(self, source_refs: list[str], event: str, **deltas: int) -> None:
         for source_ref in source_refs:
-            self.storage.record_scout_feedback(source_ref, last_event=event, **deltas)
+            self.storage.record_scout_feedback(canonicalize_source_ref(source_ref), last_event=event, **deltas)
 
     def _promotion_review_verdict(self, candidate: dict) -> dict | None:
         candidate_run_id = candidate["id"]
