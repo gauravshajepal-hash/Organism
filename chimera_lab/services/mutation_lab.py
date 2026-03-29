@@ -138,7 +138,11 @@ class MutationLab:
         applied_edits = []
         apply_errors = []
         if target_path and plan["edits"]:
-            applied_edits, apply_errors = self._apply_edits(Path(target_path), plan["edits"])
+            applied_edits, apply_errors = self._apply_edits(
+                Path(target_path),
+                plan["edits"],
+                allowed_paths=plan.get("selected_files", []),
+            )
         self.artifact_store.create(
             "mutation_candidate",
             {
@@ -202,16 +206,18 @@ class MutationLab:
             summary = f"{plan['summary']} Guardrails quarantined this mutation."
         self.storage.update_task_run(candidate["id"], status=status, result_summary=summary[:500])
 
-    def _apply_edits(self, worktree: Path, edits: list[dict]) -> tuple[list[dict], list[str]]:
+    def _apply_edits(self, worktree: Path, edits: list[dict], allowed_paths: list[str] | None = None) -> tuple[list[dict], list[str]]:
         applied = []
         errors: list[str] = []
+        allowed_paths = [self._normalize_relative_path(path) for path in (allowed_paths or [])]
         for edit in edits:
             relative = edit.get("path")
             replacements = edit.get("replacements") or []
             if not relative or not replacements:
                 errors.append(f"Skipping malformed edit for path={relative!r}")
                 continue
-            file_path = (worktree / relative).resolve()
+            normalized_relative = self._resolve_edit_path(str(relative), allowed_paths)
+            file_path = (worktree / normalized_relative).resolve()
             if worktree not in file_path.parents and file_path != worktree:
                 errors.append(f"Rejected path outside worktree: {relative}")
                 continue
@@ -221,10 +227,10 @@ class MutationLab:
                 search = replacement.get("search")
                 replace = replacement.get("replace")
                 if search is None or replace is None:
-                    errors.append(f"Malformed replacement block in {relative}")
+                    errors.append(f"Malformed replacement block in {normalized_relative}")
                     continue
                 if search not in content:
-                    errors.append(f"SEARCH block not found in {relative}")
+                    errors.append(f"SEARCH block not found in {normalized_relative}")
                     continue
                 content = content.replace(search, replace, 1)
             if content == before:
@@ -235,12 +241,38 @@ class MutationLab:
                 unified_diff(
                     before.splitlines(keepends=True),
                     content.splitlines(keepends=True),
-                    fromfile=f"{relative}.before",
-                    tofile=f"{relative}.after",
+                    fromfile=f"{normalized_relative}.before",
+                    tofile=f"{normalized_relative}.after",
                 )
             )
-            applied.append({"path": relative, "diff": diff})
+            applied.append({"path": normalized_relative, "diff": diff})
         return applied, errors
+
+    def _resolve_edit_path(self, relative: str, allowed_paths: list[str]) -> str:
+        normalized = self._normalize_relative_path(relative)
+        if not allowed_paths:
+            return normalized
+        if normalized in allowed_paths:
+            return normalized
+        stripped = normalized
+        for prefix in ("path/to/", "workspace/", "repo/", "project/"):
+            if stripped.startswith(prefix):
+                stripped = stripped[len(prefix) :]
+        if stripped in allowed_paths:
+            return stripped
+        suffix_matches = [path for path in allowed_paths if path.endswith(stripped) or stripped.endswith(path)]
+        if len(suffix_matches) == 1:
+            return suffix_matches[0]
+        name_matches = [path for path in allowed_paths if Path(path).name == Path(stripped).name]
+        if len(name_matches) == 1:
+            return name_matches[0]
+        return stripped
+
+    def _normalize_relative_path(self, relative: str) -> str:
+        normalized = relative.replace("\\", "/").strip()
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        return normalized.lstrip("/")
 
     def _failure_context_for_run(self, run_id: str) -> str:
         run = self.storage.get_task_run(run_id)

@@ -6,6 +6,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from chimera_lab.app import create_app
+from chimera_lab.services.mutation_lab import MutationLab
 from chimera_lab.services.sandbox_runner import SandboxRunner
 
 
@@ -164,3 +165,27 @@ def test_prepare_worktree_ignores_nested_worktrees(tmp_path: Path) -> None:
 
     assert (destination / "main.py").read_text(encoding="utf-8") == "print('ok')\n"
     assert not (destination / "data" / "worktrees").exists()
+
+
+def test_mutation_lab_normalizes_generated_paths(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    target = worktree / "chimera_lab" / "services" / "run_automation.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("old value\n", encoding="utf-8")
+
+    lab = object.__new__(MutationLab)
+    applied, errors = lab._apply_edits(  # noqa: SLF001
+        worktree,
+        [
+            {
+                "path": "path/to/chimera_lab/services/run_automation.py",
+                "replacements": [{"search": "old value", "replace": "new value"}],
+            }
+        ],
+        allowed_paths=["chimera_lab/services/run_automation.py"],
+    )
+
+    assert errors == []
+    assert applied[0]["path"] == "chimera_lab/services/run_automation.py"
+    assert target.read_text(encoding="utf-8") == "new value\n"
