@@ -259,6 +259,16 @@ def test_live_scout_search_softly_downranks_legal_noise(tmp_path: Path) -> None:
         )
     ]
 
+    response = client.post("/scout/search-live", json={"query": "agent memory research workflow", "per_source": 3})
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 3
+    assert payload[0]["source_ref"] in {
+        "https://github.com/example/agent-memory",
+        "https://arxiv.org/abs/9999.0001",
+    }
+    assert payload[-1]["source_ref"] == "https://github.com/example/legal-noise"
+
 
 def test_local_worker_parses_file_blocks_without_end_marker(tmp_path: Path) -> None:
     client = make_client(tmp_path)
@@ -287,16 +297,6 @@ def test_local_worker_parses_file_blocks_without_end_marker(tmp_path: Path) -> N
             "replacements": [{"search": "old value", "replace": "new value"}],
         }
     ]
-
-    response = client.post("/scout/search-live", json={"query": "agent memory research workflow", "per_source": 3})
-    assert response.status_code == 200
-    payload = response.json()
-    assert len(payload) == 3
-    assert payload[0]["source_ref"] in {
-        "https://github.com/example/agent-memory",
-        "https://arxiv.org/abs/9999.0001",
-    }
-    assert payload[-1]["source_ref"] == "https://github.com/example/legal-noise"
 
 
 def test_skills_research_mutation_and_vivarium(tmp_path: Path) -> None:
