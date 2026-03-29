@@ -1,23 +1,23 @@
 # Chimera Lab Research Synthesis
 
-Generated: 2026-03-29T16:10:03.277952+00:00
+Generated: 2026-03-29T16:21:13.181626+00:00
 
 ## Abstract
 Chimera Lab is a local-first research organism that combines bounded execution, artifact-first memory, live scouting, mutation guardrails, staged research workflows, and a one-way publication path. This paper records what the organism is doing now, what it has discovered, what has worked, what has failed, and which upstream research systems shaped the design.
 
 ## System Snapshot
-- Missions: 4
-- Programs: 4
-- Runs: 7
-- Artifacts: 56
-- Scout Candidates: 13
+- Missions: 5
+- Programs: 5
+- Runs: 9
+- Artifacts: 76
+- Scout Candidates: 16
 - Reviews: 0
 - Research Pipelines: 0
 - Mutation Jobs: 0
 - Promotions: 0
-- Tree Searches: 3
-- Autoresearch Runs: 3
-- Meta Improvements: 2
+- Tree Searches: 4
+- Autoresearch Runs: 4
+- Meta Improvements: 3
 - Merge Recipes: 0
 
 ## Method
@@ -43,6 +43,29 @@ Chimera Lab is a local-first research organism that combines bounded execution, 
 - This is for informational purposes to prepare for a legal consultation"><pre cla: This is for informational purposes to prepare for a legal consultation"><pre class="notranslate"><code>Role: You are a legal research assistant helping a property owner understand (https://github.com/mvanhorn/last30days-skill#1696)
 
 ## Positive Results
+- Completed plan run: # Execution Status: Capability Boundaries Clarified
+
+## What I Cannot Do
+- ❌ Execute shell commands (no filesystem/command access)
+- ❌ Modify my own execution environment or code
+- ❌ Run self-upgrade cycles or system modifications
+- ❌ Access live GitHub repositories (only reference URLs provided in context)
+
+## What I Can Do
+- ✅ Analyze provided context and data
+- ✅ Identify patterns and risks in the information given
+- ✅ Recommend engineering changes based on available knowledge
+- ✅ Draft publi
+- Completed research_ingest run: ## Execution Plan: Research Ingest → Gap Analysis → Publication
+
+### Identified Gap: Context Scope Validation
+**Reliability Issue**: Memory/Source feed content is heavily weighted toward legal-case contexts (last30days-skill) without explicit domain boundaries. Risk of:
+- Applying case-citation protocols to non-legal operations
+- Grounding claims in irrelevant legal domains
+- Missing core AI safety/capability verification
+
+### Highest-Leverage Improvement: Scope-Bound Grounding Layer
+**Action**:
 - Completed plan run: ## Executive Plan: Chimera Lab Self-Diagnosis
 
 ### 🔍 Current State Assessment
@@ -76,12 +99,11 @@ For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/St
 For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
 - Autoresearch: Plan the next upgrades for public publication, scout ranking, and research visibility.: Best plan_quality score: 0.58
 - Autoresearch: Improve scout ranking precision for research-organism discovery: Best signal_score score: 0.62
-- Autoresearch: Using your repo test signal, scout discoveries, runtime safety architecture, and current public output, decide the single highest leverage self-upgrade for Chimera Lab. State what to change first, why it matters, and what to defer.: Best plan_quality score: 0.58
-- Tree search: Plan the next upgrades for public publication, scout ranking, and research visibility.: 13 nodes explored, best score 0.6625
 
 ## Negative Results
 - research_ingest failed: Client error '429 Unknown Error' for url 'https://export.arxiv.org/api/query?search_query=all%3AWhat+should+Chimera+Lab+discover+first+to+improve+its+research%2C+memory%2C+and+execution+stack%3F&start=0&max_results=3'
 For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+- scout_live_search_error: {"source": "arxiv", "query": "Discover the most important missing capability or reliability gap in Chimera Lab.", "error": "Client error '429 Unknown Error' for url 'https://export.arxiv.org/api/query?search_query=all%3ADiscover+the+most+important+missing+capability+or+reliability+gap+in+Chimera+Lab.&start=0&max_results=3'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429"}
 - scout_live_search_error: {"source": "arxiv", "query": "Discover the highest-signal upstream work for self-improving research organisms, scout ranking, memory systems, mutation safety, and one-way publication surfaces.", "error": "Client error '429 Too Many Requests' for url 'https://export.arxiv.org/api/query?search_query=all%3ADiscover+the+highest-signal+upstream+work+for+self-improving+research+organisms%2C+scout+ranking%2C+memory+systems%2C+mutation+safety%2C+and+one-way+publication+surfaces.&start=0&max_results=3'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429"}
 - scout_live_search_error: {"source": "arxiv", "query": "Discover high-signal repos, papers, and skill feeds for self-improving research organisms, memory systems, mutation safety, and publication surfaces.", "error": "Client error '429 Unknown Error' for url 'https://export.arxiv.org/api/query?search_query=all%3ADiscover+high-signal+repos%2C+papers%2C+and+skill+feeds+for+self-improving+research+organisms%2C+memory+systems%2C+mutation+safety%2C+and+publication+surfaces.&start=0&max_results=3'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429"}
 - scout_live_search_error: {"source": "arxiv", "query": "What should Chimera Lab discover first to improve its research, memory, and execution stack?", "error": "The read operation timed out"}
