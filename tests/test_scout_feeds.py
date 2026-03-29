@@ -94,3 +94,15 @@ def test_scout_feed_registry_downranks_noisy_legal_examples_without_hard_ontolog
     assert len(discovered) == 2
     assert discovered[0]["source_ref"] == "https://example.com/agent-memory"
     assert discovered[1]["source_ref"] == "https://example.com/legal"
+
+
+def test_scout_feed_registry_merges_compact_and_expanded_queries() -> None:
+    registry = ScoutFeedRegistry(feeds=[SoftRankingFeed()])
+    discovered = registry.discover_with_queries(
+        query="What should Chimera Lab discover first for self-improving research agents and memory systems?",
+        queries=["research agents memory", "research agents memory workflow retrieval benchmark"],
+        limit_per_feed=10,
+    )
+
+    assert len(discovered) == 2
+    assert discovered[0]["source_ref"] == "https://example.com/agent-memory"

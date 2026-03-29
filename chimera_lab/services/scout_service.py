@@ -24,15 +24,35 @@ class ScoutService:
     def list(self) -> list[dict]:
         return self.storage.list_scout_candidates()
 
+    def build_query_plan(self, query: str) -> dict[str, Any]:
+        normalized = re.sub(r"\s+", " ", (query or "").strip())
+        tokens = self._query_tokens(normalized)
+        compact_terms = self._compact_terms(tokens)
+        compact_query = " ".join(compact_terms) if compact_terms else normalized
+        expanded_terms = compact_terms + self._expanded_terms(compact_terms)
+        expanded_query = " ".join(dict.fromkeys(expanded_terms)) if expanded_terms else compact_query
+        return {
+            "original_query": normalized,
+            "compact_query": compact_query,
+            "expanded_query": expanded_query,
+        }
+
     def search_live_sources(self, query: str, per_source: int = 3) -> list[dict]:
+        query_plan = self.build_query_plan(query)
         results: list[dict] = []
-        for variant in self._query_variants(query):
+        variants = [query_plan["compact_query"], query_plan["expanded_query"]]
+        for variant in dict.fromkeys(item.strip() for item in variants if item and item.strip()):
             results.extend(self._safe_search("github", variant, per_source, self._search_github))
             results.extend(self._safe_search("arxiv", variant, per_source, self._search_arxiv))
         results = self._rank_live_results(query, results, limit=max(1, per_source * 2))
         self.artifact_store.create(
             "scout_live_search",
-            {"query": query, "count": len(results), "source_refs": [item["source_ref"] for item in results]},
+            {
+                "query": query,
+                "query_plan": query_plan,
+                "count": len(results),
+                "source_refs": [item["source_ref"] for item in results],
+            },
             source_refs=[item["id"] for item in results],
             created_by="scout_service",
         )
@@ -168,26 +188,87 @@ class ScoutService:
             )
         return self._rank_live_results(query, results, limit=per_source)
 
-    def _query_variants(self, query: str) -> list[str]:
-        variants = [query.strip()]
-        lowered = query.lower()
-        soft_terms: list[str] = []
-        if any(token in lowered for token in {"agent", "organism", "autonomous", "workflow", "skill"}):
-            soft_terms.extend(["agent", "skill", "workflow"])
-        if any(token in lowered for token in {"research", "paper", "benchmark", "experiment"}):
-            soft_terms.extend(["research", "benchmark", "experiment", "referee"])
-        if any(token in lowered for token in {"memory", "context", "retrieval"}):
-            soft_terms.extend(["memory", "retrieval", "graph"])
-        if any(token in lowered for token in {"mutation", "patch", "repair"}):
-            soft_terms.extend(["mutation", "repair", "evaluation"])
-        if any(token in lowered for token in {"repo", "github", "tool", "code"}):
-            soft_terms.extend(["github", "repo", "tooling"])
-        if soft_terms:
-            variants.append(query.strip() + " " + " ".join(dict.fromkeys(soft_terms)))
-        compact = " ".join(dict.fromkeys(re.findall(r"[A-Za-z0-9_]{4,}", lowered)))
-        if compact and compact not in variants:
-            variants.append(compact)
-        return [variant for variant in dict.fromkeys(variant.strip() for variant in variants if variant.strip())]
+    def _query_tokens(self, query: str) -> list[str]:
+        ignore = {
+            "what",
+            "when",
+            "where",
+            "which",
+            "should",
+            "could",
+            "would",
+            "discover",
+            "first",
+            "best",
+            "chimera",
+            "lab",
+            "organism",
+            "into",
+            "from",
+            "with",
+            "that",
+            "this",
+            "have",
+            "will",
+            "local",
+        }
+        tokens = [token for token in re.findall(r"[A-Za-z0-9_]{3,}", query.lower()) if token not in ignore]
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for token in tokens:
+            if token not in seen:
+                seen.add(token)
+                deduped.append(token)
+        return deduped
+
+    def _compact_terms(self, tokens: list[str]) -> list[str]:
+        priorities = {
+            "research": 10,
+            "agent": 10,
+            "agents": 10,
+            "memory": 9,
+            "coding": 8,
+            "code": 8,
+            "workflow": 8,
+            "retrieval": 8,
+            "benchmark": 7,
+            "evaluation": 7,
+            "loops": 7,
+            "loop": 7,
+            "self": 6,
+            "improving": 6,
+            "systems": 6,
+            "repo": 5,
+            "repos": 5,
+            "tool": 5,
+            "tools": 5,
+        }
+        scored = sorted(tokens, key=lambda token: (-priorities.get(token, 1), tokens.index(token)))
+        compact = scored[:8]
+        return compact or tokens[:8]
+
+    def _expanded_terms(self, compact_terms: list[str]) -> list[str]:
+        soft_map = {
+            "research": ["benchmark", "experiment", "referee"],
+            "agent": ["workflow", "skill", "tool"],
+            "agents": ["workflow", "skill", "tool"],
+            "memory": ["retrieval", "graph", "context"],
+            "coding": ["repo", "tooling", "execution"],
+            "code": ["repo", "tooling", "execution"],
+            "workflow": ["automation", "orchestration"],
+            "self": ["improvement", "iteration"],
+            "improving": ["improvement", "iteration"],
+            "loops": ["repair", "evaluation"],
+            "loop": ["repair", "evaluation"],
+        }
+        expanded: list[str] = []
+        seen: set[str] = set()
+        for term in compact_terms:
+            for related in soft_map.get(term, []):
+                if related not in seen and related not in compact_terms:
+                    seen.add(related)
+                    expanded.append(related)
+        return expanded[:8]
 
     def _rank_live_results(self, query: str, results: list[dict], limit: int) -> list[dict]:
         deduped: dict[str, dict] = {}

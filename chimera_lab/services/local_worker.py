@@ -510,6 +510,8 @@ class LocalWorker:
             sections.append("Live sources: " + ", ".join(payload["live_sources"][:6]))
         if payload.get("feed_sync_refs"):
             sections.append("Feed sync refs: " + ", ".join(payload["feed_sync_refs"][:6]))
+        if payload.get("scout_query_plan"):
+            sections.append(f"Scout query plan: {json.dumps(payload['scout_query_plan'], ensure_ascii=True)}")
         if payload.get("tree_search_summary"):
             sections.append(f"Tree search: {json.dumps(payload['tree_search_summary'], ensure_ascii=True)}")
         if payload.get("autoresearch_summary"):

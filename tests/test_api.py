@@ -173,11 +173,28 @@ def test_research_ingest_run_records_source_trace_bundle(tmp_path: Path) -> None
     refreshed = client.get(f"/runs/{run['id']}").json()
     assert refreshed["input_payload"]["source_trace_required"] is True
     assert refreshed["input_payload"]["source_trace_bundle"]["live_sources"] == ["https://github.com/bytedance/deer-flow"]
+    assert refreshed["input_payload"]["scout_query_plan"]["compact_query"]
+    assert refreshed["input_payload"]["scout_query_plan"]["expanded_query"]
+    assert refreshed["input_payload"]["source_trace_bundle"]["query_plan"]["compact_query"]
 
     artifacts = client.get("/artifacts?limit=50").json()
     bundles = [item for item in artifacts if item["type"] == "source_trace_bundle" and run["id"] in item["source_refs"]]
     assert bundles
     assert "https://github.com/bytedance/deer-flow" in bundles[0]["payload"]["source_refs"]
+
+
+def test_scout_service_builds_compact_and_expanded_queries(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    plan = client.app.state.services.scout_service.build_query_plan(
+        "What should Chimera Lab discover first for self-improving research agents, memory systems, and local coding loops?"
+    )
+
+    assert plan["compact_query"] != ""
+    assert plan["expanded_query"] != ""
+    assert len(plan["compact_query"].split()) <= len(plan["expanded_query"].split())
+    assert "research" in plan["compact_query"]
+    assert "memory" in plan["compact_query"]
+    assert "retrieval" in plan["expanded_query"] or "workflow" in plan["expanded_query"]
 
 
 def test_live_scout_search_tolerates_partial_source_failure(tmp_path: Path) -> None:

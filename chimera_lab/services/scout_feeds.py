@@ -315,6 +315,21 @@ class ScoutFeedRegistry:
         items.sort(key=lambda item: (-self._rank_item(query, item), item["source_ref"]))
         return items
 
+    def discover_with_queries(self, query: str | None, queries: list[str], limit_per_feed: int = 10) -> list[dict[str, Any]]:
+        deduped: dict[str, dict[str, Any]] = {}
+        effective_queries = [item.strip() for item in queries if item and item.strip()]
+        if not effective_queries:
+            effective_queries = [query or ""]
+        for effective_query in dict.fromkeys(effective_queries):
+            for item in self.discover(query=effective_query, limit_per_feed=limit_per_feed):
+                fingerprint = item["source_ref"]
+                incumbent = deduped.get(fingerprint)
+                if incumbent is None or self._rank_item(query, item) > self._rank_item(query, incumbent):
+                    deduped[fingerprint] = item
+        items = list(deduped.values())
+        items.sort(key=lambda item: (-self._rank_item(query, item), item["source_ref"]))
+        return items
+
     def catalog(self) -> list[dict[str, Any]]:
         return [
             {

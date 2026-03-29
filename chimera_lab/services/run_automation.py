@@ -41,7 +41,12 @@ class RunAutomation:
         auto_organs: list[str] = list(payload.get("auto_organs") or [])
 
         if run["task_type"] == "research_ingest":
-            feed_items = self.scout_feed_registry.discover(query=query, limit_per_feed=5)
+            scout_query_plan = self.scout_service.build_query_plan(query)
+            feed_items = self.scout_feed_registry.discover_with_queries(
+                query=query,
+                queries=[scout_query_plan["compact_query"], scout_query_plan["expanded_query"]],
+                limit_per_feed=5,
+            )
             live_sources = self.scout_service.search_live_sources(query, per_source=3)
             synced_refs = []
             for item in feed_items:
@@ -63,10 +68,12 @@ class RunAutomation:
                 )
             payload["feed_sync_refs"] = synced_refs
             payload["live_sources"] = [item["source_ref"] for item in live_sources]
+            payload["scout_query_plan"] = scout_query_plan
             payload["memory_context"] = self.memory_tiers.retrieve(query, tier="working", limit=5)
             payload["source_trace_required"] = True
             payload["source_trace_bundle"] = {
                 "query": query,
+                "query_plan": scout_query_plan,
                 "feed_sync_refs": synced_refs[:10],
                 "live_sources": payload["live_sources"][:10],
             }
@@ -144,6 +151,7 @@ class RunAutomation:
                 "task_type": run["task_type"],
                 "auto_organs": payload["auto_organs"],
                 "source_trace_required": bool(payload.get("source_trace_required")),
+                "scout_query_plan": payload.get("scout_query_plan"),
             },
             source_refs=[run["id"]],
             created_by="run_automation",
