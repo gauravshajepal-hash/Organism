@@ -175,10 +175,22 @@ scripts/
 python -m venv .venv
 .venv\Scripts\activate
 pip install -e .[dev]
-uvicorn chimera_lab.app:create_app --factory --reload
+organism run
 ```
 
 Open the local operator UI at [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+You can also use:
+
+```bash
+python organism.py run
+```
+
+or:
+
+```bash
+python -m chimera_lab run
+```
 
 ### Recommended Local Run Mode
 
@@ -187,13 +199,25 @@ You do not need cloud API keys to run the organism locally.
 PowerShell:
 
 ```powershell
-$env:CHIMERA_ENABLE_OLLAMA="1"
-$env:CHIMERA_LOCAL_MODEL="qwen3.5:9b"
-$env:CHIMERA_FRONTIER_PROVIDER="manual"
-uvicorn chimera_lab.app:create_app --factory --reload
+organism run
 ```
 
-That uses the local worker only and keeps frontier planning/audit in manual mode.
+That starts the safe autonomous mode by default:
+
+- supervisor enabled
+- background arXiv ingestion enabled
+- local Ollama execution enabled
+- frontier provider set to `manual` unless you override it
+- local model defaulted to `qwen3.5:9b` unless you override it
+- no `--reload`, so the organism does not restart itself while writing runtime files
+
+Useful overrides:
+
+```powershell
+organism run --model qwen2.5-coder:7b
+organism run --frontier-provider openai
+organism dev
+```
 
 ### When API Keys Are Actually Needed
 

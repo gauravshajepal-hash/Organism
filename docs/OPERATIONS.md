@@ -6,19 +6,25 @@
 python -m venv .venv
 .venv\Scripts\activate
 pip install -e .[dev]
-uvicorn chimera_lab.app:create_app --factory --reload
+organism run
 ```
 
 Recommended local-first mode on this machine:
 
 ```powershell
-$env:CHIMERA_ENABLE_OLLAMA="1"
-$env:CHIMERA_LOCAL_MODEL="qwen3.5:9b"
-$env:CHIMERA_FRONTIER_PROVIDER="manual"
-uvicorn chimera_lab.app:create_app --factory --reload
+organism run
+```
+
+Fallback entrypoints:
+
+```powershell
+python organism.py run
+python -m chimera_lab run
 ```
 
 That avoids cloud calls entirely. `OPENAI_API_KEY` and `GEMINI_API_KEY` are optional and only needed for automated frontier planning/audit.
+
+Use `organism dev` only when you are actively editing code. Autonomous mode should not use reload.
 
 Open:
 
