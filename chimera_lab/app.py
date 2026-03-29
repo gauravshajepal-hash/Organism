@@ -79,6 +79,7 @@ from chimera_lab.services.company_layer import AutonomousCompany
 from chimera_lab.services.evolution_rollout import EvolutionRolloutManager
 from chimera_lab.services.frontier_adapter import FrontierAdapter
 from chimera_lab.services.git_safety import GitSafetyService
+from chimera_lab.services.github_repo_service import GitHubRepoService
 from chimera_lab.services.local_worker import LocalWorker
 from chimera_lab.services.memory_tiers import MemoryTierOrchestrator
 from chimera_lab.services.memory_service import MemoryService
@@ -140,6 +141,7 @@ class AppServices:
     company: AutonomousCompany
     publication_service: PublicationService
     git_safety: GitSafetyService
+    github_repo_service: GitHubRepoService
     runtime_guard: RuntimeGuard
 
 
@@ -165,6 +167,7 @@ def create_app() -> FastAPI:
     paper_digest_service = PaperDigestService(settings, scout_service, artifact_store, memory_tiers=memory_tiers)
     publication_service = PublicationService(settings, storage, analytics_mirror=analytics_mirror)
     git_safety = GitSafetyService(settings, artifact_store)
+    github_repo_service = GitHubRepoService(settings, storage, artifact_store)
     runtime_guard = RuntimeGuard(settings, artifact_store, git_safety=git_safety)
     arxiv_scheduler = ArxivScheduler(settings, storage, artifact_store, paper_digest_service, runtime_guard)
     review_tribunal = ReviewTribunal(storage, artifact_store)
@@ -192,6 +195,9 @@ def create_app() -> FastAPI:
         run_automation=run_automation,
         frontier_adapter=frontier_adapter,
         local_worker=local_worker,
+        git_safety=git_safety,
+        github_repo_service=github_repo_service,
+        git_root=settings.git_root,
     )
     meta_improvement_executor = MetaImprovementExecutor(settings, storage, artifact_store, research_evolution_lab, mutation_lab=mutation_lab)
     rollout_manager = EvolutionRolloutManager(
@@ -248,6 +254,7 @@ def create_app() -> FastAPI:
         company=AutonomousCompany(owner_name="human", starting_cash=500.0),
         publication_service=publication_service,
         git_safety=git_safety,
+        github_repo_service=github_repo_service,
         runtime_guard=runtime_guard,
     )
 

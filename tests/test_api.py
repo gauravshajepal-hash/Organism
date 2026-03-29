@@ -9,13 +9,17 @@ from chimera_lab.app import create_app
 from chimera_lab.services.local_worker import LocalWorker
 
 
-def make_client(tmp_path: Path) -> TestClient:
+def make_client(tmp_path: Path, repo_root: Path | None = None) -> TestClient:
     import os
 
     os.environ["CHIMERA_DATA_DIR"] = str(tmp_path / "data")
     os.environ["CHIMERA_ENABLE_OLLAMA"] = "0"
     os.environ["CHIMERA_SANDBOX_MODE"] = "local"
     os.environ["CHIMERA_FRONTIER_PROVIDER"] = "manual"
+    if repo_root is not None:
+        os.environ["CHIMERA_GIT_ROOT"] = str(repo_root)
+    else:
+        os.environ.pop("CHIMERA_GIT_ROOT", None)
     app = create_app()
     return TestClient(app)
 
@@ -66,6 +70,74 @@ def test_local_run_flow(tmp_path: Path) -> None:
     run_artifact_types = {item["type"] for item in run_artifacts.json()}
     assert "local_worker_output" in run_artifact_types
     assert "sandbox_execution" in run_artifact_types
+
+
+def test_code_run_takes_git_savepoint_before_repo_modification(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    client = make_client(tmp_path, repo_root=repo)
+    services = client.app.state.services
+    _, program_id = create_seed_objects(client)
+
+    with patch.object(type(services.git_safety), "checkpoint_if_needed", return_value={"status": "ok", "commit": "abc123"}) as checkpoint_mock:
+        run = client.post(
+            f"/programs/{program_id}/runs",
+            json={
+                "task_type": "code",
+                "instructions": "Update the local repo and run a quick check.",
+                "target_path": str(repo),
+                "command": "python -c \"print('ok')\"",
+            },
+        ).json()
+
+        started = client.post(f"/runs/{run['id']}/start")
+        assert started.status_code == 200
+        assert checkpoint_mock.called
+
+    savepoint_artifacts = client.get(f"/runs/{run['id']}/artifacts?type_=run_savepoint").json()
+    assert savepoint_artifacts
+    assert savepoint_artifacts[0]["payload"]["checkpoint"]["status"] == "ok"
+
+
+def test_code_run_can_materialize_github_repo_before_execution(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo_root"
+    repo_root.mkdir()
+    external_repo = tmp_path / "external_repo"
+    external_repo.mkdir()
+    (external_repo / "README.md").write_text("hello\n", encoding="utf-8")
+
+    client = make_client(tmp_path, repo_root=repo_root)
+    services = client.app.state.services
+    _, program_id = create_seed_objects(client)
+
+    with patch.object(
+        type(services.github_repo_service),
+        "materialize",
+        return_value={
+            "source_url": "https://github.com/example/remote-repo.git",
+            "local_path": str(external_repo),
+            "owner": "example",
+            "repo": "remote-repo",
+            "branch": "main",
+            "head": "deadbeef",
+            "created": True,
+        },
+    ):
+        run = client.post(
+            f"/programs/{program_id}/runs",
+            json={
+                "task_type": "code",
+                "instructions": "Inspect https://github.com/example/remote-repo and summarize it.",
+                "command": "python -c \"print('ok')\"",
+            },
+        ).json()
+        started = client.post(f"/runs/{run['id']}/start")
+        assert started.status_code == 200
+
+    refreshed = client.get(f"/runs/{run['id']}").json()
+    assert refreshed["target_path"] == str(external_repo)
+    assert refreshed["input_payload"]["github_repo_url"] == "https://github.com/example/remote-repo.git"
+    assert refreshed["input_payload"]["github_repo_local_path"] == str(external_repo)
 
 
 def test_frontier_run_flow(tmp_path: Path) -> None:

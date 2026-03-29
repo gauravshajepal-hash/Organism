@@ -19,6 +19,7 @@ class Settings:
     blobs_dir: Path
     skills_dir: Path
     git_root: Path
+    github_repo_cache_dir: Path
     git_remote_url: str
     git_mirror_remote_url: str | None
     git_mirror_remote_name: str
@@ -96,6 +97,7 @@ def load_settings() -> Settings:
         blobs_dir=base / "blobs",
         skills_dir=Path(os.getenv("CHIMERA_SKILLS_DIR", "skills")).resolve(),
         git_root=Path(os.getenv("CHIMERA_GIT_ROOT", ".")).resolve(),
+        github_repo_cache_dir=Path(os.getenv("CHIMERA_GITHUB_REPO_CACHE_DIR", str(base / "external_repos"))).resolve(),
         git_remote_url=os.getenv("CHIMERA_GIT_REMOTE_URL", "https://github.com/gauravshajepal-hash/Organism.git"),
         git_mirror_remote_url=(os.getenv("CHIMERA_GIT_MIRROR_REMOTE_URL") or "").strip() or None,
         git_mirror_remote_name=os.getenv("CHIMERA_GIT_MIRROR_REMOTE_NAME", "mirror").strip() or "mirror",

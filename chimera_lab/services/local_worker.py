@@ -73,7 +73,16 @@ class LocalWorker:
                     "model": self.settings.local_model,
                     "stream": False,
                     "messages": [
-                        {"role": "system", "content": "You are Chimera Lab's local execution model. Be concise and implementation-focused."},
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are Chimera Lab's local execution model. "
+                                "Be concise and implementation-focused. "
+                                "The runtime can inspect local files, run shell commands, sync live GitHub repositories into local workspaces, "
+                                "and run self-upgrade cycles. "
+                                "When a task can modify Chimera's own code or execution environment, the runtime takes a git savepoint before mutation."
+                            ),
+                        },
                         {"role": "user", "content": prompt},
                     ],
                 },
@@ -105,6 +114,7 @@ class LocalWorker:
                 f"Repo context:\n{repo_context}",
                 f"Organ context:\n{organ_context}",
                 source_trace_requirement,
+                self._capability_statement(run),
                 "Return a concise execution plan, notable risks, and the next action.",
             ]
         )
@@ -126,6 +136,22 @@ class LocalWorker:
             marker = "/" if item.is_dir() else ""
             entries.append(f"- {item.name}{marker}")
         return "\n".join(entries) if entries else "Target path is empty."
+
+    def _capability_statement(self, run: dict) -> str:
+        payload = run.get("input_payload") or {}
+        lines = [
+            "Runtime capabilities:",
+            "- You can work against local files and shell commands through the runtime.",
+            "- You can access a live GitHub repository when the runtime has synced it into a local workspace.",
+            "- You can participate in self-upgrade cycles through bounded mutation, canary, review, and promotion gates.",
+        ]
+        if payload.get("github_repo_url"):
+            lines.append(f"- GitHub repository synced: {payload['github_repo_url']}")
+        if payload.get("github_repo_local_path"):
+            lines.append(f"- Local synced repo path: {payload['github_repo_local_path']}")
+        if str(run.get("task_type") or "").lower() in {"code", "fix", "tool"}:
+            lines.append("- A git savepoint is taken before self-modifying runs that touch the main Chimera repo.")
+        return "\n".join(lines)
 
     def _command_sequence(self, run: dict) -> list[str]:
         commands = [run["command"]]

@@ -118,18 +118,34 @@ class EvolutionRolloutManager:
             model_tier="supervisor",
         )
 
+        pre_checkpoint = self.git_safety.checkpoint(f"pre-auto-promotion-{candidate_run_id}", push=True)
+        pre_checkpoint_ok = pre_checkpoint.get("status") in {"ok", "push_reconciled", "push_only_ok", "push_verified", "clean_noop"}
+        if not pre_checkpoint_ok:
+            updated = self.storage.update_mutation_rollout(
+                rollout["id"],
+                status="blocked_risk",
+                metadata={**(rollout.get("metadata") or {}), "pre_checkpoint": pre_checkpoint},
+            )
+            self.artifact_store.create(
+                "mutation_auto_promotion_blocked",
+                {"candidate_run_id": candidate_run_id, "checkpoint": pre_checkpoint},
+                source_refs=[candidate_run_id, rollout["id"]],
+                created_by="evolution_rollout",
+            )
+            return updated
+
         apply_result = self._apply_candidate_to_repo(candidate, repo_root)
         if not apply_result["applied_paths"]:
             return self.storage.update_mutation_rollout(rollout["id"], status="blocked_risk", metadata={"risk_reasons": ["no_repo_apply_paths"]})
 
         checkpoint = self.git_safety.checkpoint(f"auto-promotion-{candidate_run_id}", push=True)
-        checkpoint_ok = checkpoint.get("status") in {"ok", "push_reconciled"}
+        checkpoint_ok = checkpoint.get("status") in {"ok", "push_reconciled", "push_only_ok", "push_verified"}
         if not checkpoint_ok:
             self._restore_backups(apply_result["backups"])
             updated = self.storage.update_mutation_rollout(
                 rollout["id"],
                 status="blocked_risk",
-                metadata={**(rollout.get("metadata") or {}), "checkpoint": checkpoint},
+                metadata={**(rollout.get("metadata") or {}), "pre_checkpoint": pre_checkpoint, "checkpoint": checkpoint},
             )
             self.artifact_store.create(
                 "mutation_auto_promotion_blocked",
@@ -148,11 +164,12 @@ class EvolutionRolloutManager:
             rollout["id"],
             status="promoted",
             promotion_id=promotion["id"],
-            commit_before=apply_result["commit_before"],
+            commit_before=pre_checkpoint.get("commit") or apply_result["commit_before"],
             commit_after=checkpoint.get("commit"),
             last_canary_at=_utc_now(),
             metadata={
                 **(rollout.get("metadata") or {}),
+                "pre_checkpoint": pre_checkpoint,
                 "canary": canary,
                 "review_id": review["id"],
                 "applied_paths": apply_result["applied_paths"],

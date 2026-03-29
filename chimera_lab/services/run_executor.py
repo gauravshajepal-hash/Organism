@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from chimera_lab.db import Storage
 from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.frontier_adapter import FrontierAdapter
+from chimera_lab.services.git_safety import GitSafetyService
+from chimera_lab.services.github_repo_service import GitHubRepoService
 from chimera_lab.services.local_worker import LocalWorker
 from chimera_lab.services.run_automation import RunAutomation
 from chimera_lab.services.runtime_guard import RuntimeGuard
@@ -19,6 +22,9 @@ class RunExecutor:
     run_automation: RunAutomation
     frontier_adapter: FrontierAdapter
     local_worker: LocalWorker
+    git_safety: GitSafetyService
+    github_repo_service: GitHubRepoService
+    git_root: Path
 
     def execute(self, run_id: str) -> dict[str, Any]:
         run = self.storage.get_task_run(run_id)
@@ -32,6 +38,8 @@ class RunExecutor:
         )
 
         try:
+            run = self.github_repo_service.resolve_for_run(run)
+            self._checkpoint_before_mutation(run)
             run = self.run_automation.prepare_run(run)
             self.storage.update_task_run(run_id, status="running")
             if run["worker_tier"] in {"frontier_planner", "frontier_auditor"}:
@@ -86,3 +94,31 @@ class RunExecutor:
                 push_backup=True,
             )
             return self.storage.update_task_run(run_id, status="failed", result_summary=str(exc))
+
+    def _checkpoint_before_mutation(self, run: dict[str, Any]) -> None:
+        if not self._run_can_modify_repo(run):
+            return
+        checkpoint = self.git_safety.checkpoint_if_needed(
+            reason=f"pre-run-savepoint-{run['id']}",
+            push=True,
+            force=True,
+        )
+        self.artifact_store.create(
+            "run_savepoint",
+            {
+                "run_id": run["id"],
+                "task_type": run["task_type"],
+                "checkpoint": checkpoint,
+            },
+            source_refs=[run["id"]],
+            created_by="run_executor",
+        )
+        if checkpoint.get("status") not in {"ok", "push_reconciled", "push_only_ok", "push_verified", "clean_noop"}:
+            raise RuntimeError(f"Pre-run savepoint failed: {checkpoint.get('status')}")
+
+    def _run_can_modify_repo(self, run: dict[str, Any]) -> bool:
+        task_type = str(run.get("task_type") or "").lower()
+        if task_type not in {"code", "fix", "tool"}:
+            return False
+        target = Path(str(run.get("target_path") or self.git_root)).resolve()
+        return target == self.git_root.resolve() or self.git_root.resolve() in target.parents
