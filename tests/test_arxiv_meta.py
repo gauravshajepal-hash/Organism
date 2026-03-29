@@ -95,7 +95,7 @@ def test_arxiv_scheduler_uses_recent_queries(tmp_path: Path) -> None:
     )
 
     seen_queries: list[str] = []
-    def fake_ingest(self, query, max_results=None, force=False, digest_top_n=None):  # noqa: ARG001
+    def fake_ingest(query, max_results=None, force=False, digest_top_n=None):  # noqa: ARG001
         seen_queries.append(query)
         return {
             "query": query,
