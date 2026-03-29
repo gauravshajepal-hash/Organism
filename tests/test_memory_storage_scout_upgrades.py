@@ -5,7 +5,13 @@ from unittest.mock import patch
 
 from chimera_lab.services.analytics_mirror import AnalyticsMirror
 from chimera_lab.services.memory_tiers import MemoryTierOrchestrator, TurboQuantAdapter
-from chimera_lab.services.scout_feeds import AgentSkillsHubFeed, AwesomeAutoresearchFeed, Last30DaysSkillFeed, ScoutFeedRegistry
+from chimera_lab.services.scout_feeds import (
+    AgentSkillsHubFeed,
+    AwesomeAIAgentPapersFeed,
+    AwesomeAutoresearchFeed,
+    Last30DaysSkillFeed,
+    ScoutFeedRegistry,
+)
 
 
 class FakeResponse:
@@ -83,6 +89,14 @@ def test_scout_feed_registry_parses_first_class_sources() -> None:
                 - [Autoresearch Loop](https://example.com/skill-c) for budgeted research.
                 """
             )
+        if "awesome-ai-agent-papers" in url:
+            return FakeResponse(
+                """
+                # Awesome AI Agent Papers
+                - [BudgetMem: Learning Query-Aware Budget-Tier Routing for Runtime Agent Memory](https://arxiv.org/abs/2601.00001) - Query-aware memory tier routing.
+                - [When Single-Agent with Skills Replace Multi-Agent Systems and When They Fail](https://arxiv.org/abs/2601.00002) - Skill libraries versus multi-agent systems.
+                """
+            )
         return FakeResponse(
             """
             <html>
@@ -103,6 +117,7 @@ def test_scout_feed_registry_parses_first_class_sources() -> None:
             [
                 Last30DaysSkillFeed("https://github.com/mvanhorn/last30days-skill"),
                 AwesomeAutoresearchFeed("https://github.com/alvinunreal/awesome-autoresearch"),
+                AwesomeAIAgentPapersFeed("https://github.com/VoltAgent/awesome-ai-agent-papers"),
                 AgentSkillsHubFeed("https://agentskillshub.top/"),
             ]
         )
@@ -111,9 +126,11 @@ def test_scout_feed_registry_parses_first_class_sources() -> None:
     assert [feed["feed_name"] for feed in registry.catalog()] == [
         "last30days-skill",
         "awesome-autoresearch",
+        "awesome-ai-agent-papers",
         "agent-skills-hub",
     ]
     assert any(item["feed_name"] == "last30days-skill" for item in items)
     assert any(item["feed_name"] == "awesome-autoresearch" for item in items)
+    assert any(item["feed_name"] == "awesome-ai-agent-papers" and item["source_type"] == "paper" for item in items)
     assert any(item["feed_name"] == "agent-skills-hub" for item in items)
     assert len({item["source_ref"] for item in items}) == len(items)

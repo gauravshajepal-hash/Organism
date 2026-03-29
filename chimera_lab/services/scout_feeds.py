@@ -157,7 +157,27 @@ class BaseScoutFeed:
         return round(max(0.05, min(0.98, score)), 4)
 
 
-class MarkdownScoutFeed(BaseScoutFeed):
+class GitHubReadmeScoutFeed(BaseScoutFeed):
+    def _fetch_text(self) -> str:
+        repo_url = self.source_url.rstrip("/")
+        if "github.com/" not in repo_url:
+            return super()._fetch_text()
+        owner_repo = repo_url.split("github.com/", 1)[1].split("/", 2)
+        if len(owner_repo) < 2:
+            return super()._fetch_text()
+        owner, repo = owner_repo[0], owner_repo[1]
+        for branch in ("main", "master"):
+            try:
+                raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/README.md"
+                response = httpx.get(raw_url, timeout=30, follow_redirects=True)
+                response.raise_for_status()
+                return response.text
+            except Exception:  # noqa: BLE001
+                continue
+        return super()._fetch_text()
+
+
+class MarkdownScoutFeed(GitHubReadmeScoutFeed):
     def _parse(self, text: str, query: str | None = None, limit: int = 20) -> list[ScoutSignal]:
         candidates: list[tuple[float, ScoutSignal]] = []
         lines = text.splitlines()
@@ -174,7 +194,7 @@ class MarkdownScoutFeed(BaseScoutFeed):
                         continue
                     signal = ScoutSignal(
                         feed_name=self.feed_name,
-                        source_kind="github",
+                        source_kind=self._infer_source_kind(href),
                         source_ref=href,
                         title=unescape(title).strip(),
                         summary=unescape(summary).strip() or unescape(title).strip(),
@@ -213,6 +233,14 @@ class MarkdownScoutFeed(BaseScoutFeed):
         keywords = {"agent", "research", "memory", "skill", "scout", "evaluation", "benchmark", "mutation", "model", "tool"}
         tokens.update({word for word in keywords if word in text.lower()})
         return sorted(tokens)[:12]
+
+    def _infer_source_kind(self, href: str) -> str:
+        lowered = href.lower()
+        if "arxiv.org" in lowered:
+            return "paper"
+        if "github.com" in lowered:
+            return "github"
+        return "web"
 
 
 class HtmlScoutFeed(BaseScoutFeed):
@@ -285,6 +313,12 @@ class AwesomeAutoresearchFeed(MarkdownScoutFeed):
     feed_prior = 0.88
 
 
+class AwesomeAIAgentPapersFeed(MarkdownScoutFeed):
+    feed_name = "awesome-ai-agent-papers"
+    source_url = "https://github.com/VoltAgent/awesome-ai-agent-papers"
+    feed_prior = 0.92
+
+
 class AgentSkillsHubFeed(HtmlScoutFeed):
     feed_name = "agent-skills-hub"
     source_url = "https://agentskillshub.top/"
@@ -296,6 +330,7 @@ class ScoutFeedRegistry:
         self.feeds = feeds or [
             Last30DaysSkillFeed(),
             AwesomeAutoresearchFeed(),
+            AwesomeAIAgentPapersFeed(),
             AgentSkillsHubFeed(),
         ]
 
@@ -364,6 +399,7 @@ class ScoutFeedRegistry:
         source_bonus = {"github": 0.14, "paper": 0.12, "web": 0.05}.get(item.get("source_type"), 0.04)
         feed_prior = {
             "awesome-autoresearch": 0.12,
+            "awesome-ai-agent-papers": 0.14,
             "agent-skills-hub": 0.07,
             "last30days-skill": -0.04,
         }.get(item.get("feed_name"), 0.0)

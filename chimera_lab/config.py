@@ -57,6 +57,7 @@ def load_settings() -> Settings:
                     "https://github.com/SakanaAI/AI-Scientist-v2",
                     "https://github.com/snarktank/ralph",
                     "https://github.com/alvinunreal/awesome-autoresearch",
+                    "https://github.com/VoltAgent/awesome-ai-agent-papers",
                     "https://agentskillshub.top/",
                 ]
             ),
