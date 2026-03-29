@@ -115,6 +115,18 @@ def test_supervisor_compacts_stale_backlog(tmp_path: Path) -> None:
         token_budget=6000,
         input_payload={"meta_improvement_session_id": session["id"]},
     )
+    stale_running_run = services.storage.create_task_run(
+        program_id=program["id"],
+        task_type="code",
+        worker_tier="local_executor",
+        instructions="Interrupted supervisor run",
+        target_path=str(tmp_path),
+        command="python -m pytest -q",
+        time_budget=300,
+        token_budget=6000,
+        input_payload={"objective_id": stale_objective["id"], "supervisor_origin": True},
+    )
+    services.storage.update_task_run(stale_running_run["id"], status="running")
     stalled_candidate = services.storage.create_task_run(
         program_id=program["id"],
         task_type="code",
@@ -128,6 +140,7 @@ def test_supervisor_compacts_stale_backlog(tmp_path: Path) -> None:
     )
     with services.storage.connection() as conn:
         conn.execute("UPDATE task_runs SET updated_at = ? WHERE id = ?", (old, stalled_candidate["id"]))
+        conn.execute("UPDATE task_runs SET updated_at = ? WHERE id = ?", (old, stale_running_run["id"]))
 
     response = client.post("/ops/supervisor/compact-backlog")
     assert response.status_code == 200
@@ -136,6 +149,7 @@ def test_supervisor_compacts_stale_backlog(tmp_path: Path) -> None:
     assert payload["duplicate_objectives_superseded"] == 1
     assert payload["meta_base_runs_staged"] == 1
     assert payload["stale_mutation_candidates_failed"] == 1
+    assert payload["stale_running_runs_failed"] == 1
 
     recovered = services.storage.get_objective(stale_objective["id"])
     assert recovered["status"] == "pending"
@@ -149,6 +163,7 @@ def test_supervisor_compacts_stale_backlog(tmp_path: Path) -> None:
     assert any(item["status"] == "superseded" for item in duplicates)
     assert services.storage.get_task_run(base_run["id"])["status"] == "staged_for_mutation"
     assert services.storage.get_task_run(stalled_candidate["id"])["status"] == "failed"
+    assert services.storage.get_task_run(stale_running_run["id"])["status"] == "failed"
 
 
 def test_meta_improvement_execute_marks_base_run_and_records_failure(tmp_path: Path) -> None:

@@ -103,6 +103,7 @@ class AutonomySupervisor:
                 "duplicate_objectives_superseded",
                 "meta_base_runs_staged",
                 "stale_mutation_candidates_failed",
+                "stale_running_runs_failed",
             )
         )
         if meaningful:
@@ -118,6 +119,7 @@ class AutonomySupervisor:
                     "duplicate_objectives_superseded": result["duplicate_objectives_superseded"],
                     "meta_base_runs_staged": result["meta_base_runs_staged"],
                     "stale_mutation_candidates_failed": result["stale_mutation_candidates_failed"],
+                    "stale_running_runs_failed": result["stale_running_runs_failed"],
                 },
             )
         return result
@@ -317,6 +319,8 @@ class AutonomySupervisor:
             "meta_base_run_ids": run_compaction["meta_base_run_ids"],
             "stale_mutation_candidates_failed": run_compaction["stale_mutation_candidates_failed"],
             "stale_mutation_candidate_ids": run_compaction["stale_mutation_candidate_ids"],
+            "stale_running_runs_failed": run_compaction["stale_running_runs_failed"],
+            "stale_running_run_ids": run_compaction["stale_running_run_ids"],
         }
 
     def _recover_stale_running_objectives(self) -> list[str]:
@@ -374,10 +378,31 @@ class AutonomySupervisor:
         threshold = _utc_now() - timedelta(seconds=max(self.settings.supervisor_poll_interval_seconds, 300))
         meta_base_run_ids: list[str] = []
         stale_candidate_ids: list[str] = []
+        stale_running_run_ids: list[str] = []
         for run in self.storage.list_task_runs():
+            payload = run.get("input_payload") or {}
+            updated_at = _parse_iso(run.get("updated_at"))
+            if run["status"] == "running":
+                if updated_at is None or updated_at > threshold:
+                    continue
+                self.storage.update_task_run(
+                    run["id"],
+                    status="failed",
+                    result_summary="Run was interrupted during supervisor churn and compacted from backlog.",
+                )
+                self.artifact_store.create(
+                    "run_backlog_compacted",
+                    {
+                        "run_id": run["id"],
+                        "reason": "stalled_running_run",
+                    },
+                    source_refs=[run["id"]],
+                    created_by="autonomy_supervisor",
+                )
+                stale_running_run_ids.append(run["id"])
+                continue
             if run["status"] != "created":
                 continue
-            payload = run.get("input_payload") or {}
             if payload.get("meta_improvement_session_id") and not payload.get("mutation_parent_run_id"):
                 self.storage.update_task_run(
                     run["id"],
@@ -386,31 +411,31 @@ class AutonomySupervisor:
                 )
                 meta_base_run_ids.append(run["id"])
                 continue
-            if not payload.get("mutation_parent_run_id"):
-                continue
-            updated_at = _parse_iso(run.get("updated_at"))
-            if updated_at is None or updated_at > threshold:
-                continue
-            self.storage.update_task_run(
-                run["id"],
-                status="failed",
-                result_summary="Mutation candidate stalled before evaluation and was compacted from backlog.",
-            )
-            self.artifact_store.create(
-                "mutation_backlog_compacted",
-                {
-                    "candidate_run_id": run["id"],
-                    "reason": "stalled_created_candidate",
-                },
-                source_refs=[run["id"]],
-                created_by="autonomy_supervisor",
-            )
-            stale_candidate_ids.append(run["id"])
+            if payload.get("mutation_parent_run_id"):
+                if updated_at is None or updated_at > threshold:
+                    continue
+                self.storage.update_task_run(
+                    run["id"],
+                    status="failed",
+                    result_summary="Mutation candidate stalled before evaluation and was compacted from backlog.",
+                )
+                self.artifact_store.create(
+                    "mutation_backlog_compacted",
+                    {
+                        "candidate_run_id": run["id"],
+                        "reason": "stalled_created_candidate",
+                    },
+                    source_refs=[run["id"]],
+                    created_by="autonomy_supervisor",
+                )
+                stale_candidate_ids.append(run["id"])
         return {
             "meta_base_runs_staged": len(meta_base_run_ids),
             "meta_base_run_ids": meta_base_run_ids,
             "stale_mutation_candidates_failed": len(stale_candidate_ids),
             "stale_mutation_candidate_ids": stale_candidate_ids,
+            "stale_running_runs_failed": len(stale_running_run_ids),
+            "stale_running_run_ids": stale_running_run_ids,
         }
 
     def _has_active_objective(self, metadata_key: str, metadata_value: str) -> bool:
