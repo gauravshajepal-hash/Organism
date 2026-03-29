@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -66,6 +67,144 @@ def test_supervisor_run_once_executes_pending_meta_improvement(tmp_path: Path) -
         }
         assert session["id"] in executed_sessions
         assert checkpoint_mock.call_count >= 2
+
+
+def test_supervisor_compacts_stale_backlog(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    services = client.app.state.services
+
+    session = client.post(
+        "/research/meta-improvements",
+        json={
+            "target": "run_automation",
+            "objective": "Tighten bounded retries",
+            "candidate_count": 2,
+        },
+    ).json()
+
+    stale_objective = services.storage.enqueue_objective(
+        kind="meta_improvement",
+        title="Execute meta improvement",
+        objective=session["objective"],
+        priority="high",
+        metadata={"meta_improvement_id": session["id"], "target": session["target"]},
+        status="running",
+    )
+    services.storage.enqueue_objective(
+        kind="meta_improvement",
+        title="Duplicate meta objective",
+        objective=session["objective"],
+        priority="high",
+        metadata={"meta_improvement_id": session["id"], "target": session["target"]},
+        status="pending",
+    )
+    old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    with services.storage.connection() as conn:
+        conn.execute("UPDATE objective_queue SET updated_at = ? WHERE id = ?", (old, stale_objective["id"]))
+
+    mission = services.storage.create_mission("Meta cleanup", "Compact meta backlog", "high")
+    program = services.storage.create_program(mission["id"], "Compact meta backlog", ["Reduce queue noise"], {"time_budget": 300})
+    base_run = services.storage.create_task_run(
+        program_id=program["id"],
+        task_type="code",
+        worker_tier="local_executor",
+        instructions="Meta base run",
+        target_path=str(tmp_path),
+        command="python -m pytest -q",
+        time_budget=300,
+        token_budget=6000,
+        input_payload={"meta_improvement_session_id": session["id"]},
+    )
+    stalled_candidate = services.storage.create_task_run(
+        program_id=program["id"],
+        task_type="code",
+        worker_tier="local_executor",
+        instructions="[mutation:repair] stalled candidate",
+        target_path=str(tmp_path),
+        command="python -m pytest -q",
+        time_budget=300,
+        token_budget=6000,
+        input_payload={"meta_improvement_session_id": session["id"], "mutation_parent_run_id": base_run["id"]},
+    )
+    with services.storage.connection() as conn:
+        conn.execute("UPDATE task_runs SET updated_at = ? WHERE id = ?", (old, stalled_candidate["id"]))
+
+    response = client.post("/ops/supervisor/compact-backlog")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stale_objectives_requeued"] == 1
+    assert payload["duplicate_objectives_superseded"] == 1
+    assert payload["meta_base_runs_staged"] == 1
+    assert payload["stale_mutation_candidates_failed"] == 1
+
+    recovered = services.storage.get_objective(stale_objective["id"])
+    assert recovered["status"] == "pending"
+    assert recovered["metadata"]["recovered_from_stale_running_at"]
+
+    duplicates = [
+        item
+        for item in services.storage.list_objectives()
+        if (item.get("metadata") or {}).get("meta_improvement_id") == session["id"] and item["id"] != stale_objective["id"]
+    ]
+    assert any(item["status"] == "superseded" for item in duplicates)
+    assert services.storage.get_task_run(base_run["id"])["status"] == "staged_for_mutation"
+    assert services.storage.get_task_run(stalled_candidate["id"])["status"] == "failed"
+
+
+def test_meta_improvement_execute_marks_base_run_and_records_failure(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    services = client.app.state.services
+    session = client.post(
+        "/research/meta-improvements",
+        json={
+            "target": "run_automation",
+            "objective": "Tighten bounded retries",
+            "candidate_count": 2,
+        },
+    ).json()
+
+    with patch.object(type(services.mutation_lab), "stage_job", side_effect=RuntimeError("mutation planning timeout")):
+        result = services.meta_improvement_executor.execute(session["id"], auto_stage=True, iterations=1)
+
+    assert result["status"] == "failed"
+    base_run = services.storage.get_task_run(result["base_run_id"])
+    assert base_run["status"] == "failed"
+    assert "mutation planning timeout" in base_run["result_summary"]
+    artifacts = services.artifact_store.list_for_source_ref(session["id"], type_="meta_improvement_execution", limit=10)
+    assert artifacts
+    assert artifacts[0]["payload"]["status"] == "failed"
+
+
+def test_mutation_stage_job_marks_candidate_failed_on_exception(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    client = make_client(tmp_path, repo_root=repo)
+    services = client.app.state.services
+
+    mission = services.storage.create_mission("Mutation stage", "Keep candidate failures explicit", "high")
+    program = services.storage.create_program(mission["id"], "Mutation stage", ["Mark failed candidates"], {"time_budget": 300})
+    base_run = services.storage.create_task_run(
+        program_id=program["id"],
+        task_type="code",
+        worker_tier="local_executor",
+        instructions="Base mutation run",
+        target_path=str(repo),
+        command="python -m pytest -q",
+        time_budget=300,
+        token_budget=6000,
+        input_payload={},
+    )
+
+    with patch.object(type(services.mutation_lab), "_apply_and_evaluate_candidate", side_effect=RuntimeError("model timeout")):
+        job = services.mutation_lab.stage_job(base_run["id"], "repair", 1, auto_stage=True)
+
+    candidate = services.storage.get_task_run(job["candidate_run_ids"][0])
+    assert candidate is not None
+    assert candidate["status"] == "failed"
+    assert "model timeout" in candidate["result_summary"]
+    artifacts = services.artifact_store.list_for_source_ref(candidate["id"], type_="mutation_candidate_error", limit=10)
+    assert artifacts
+    assert artifacts[0]["payload"]["error"] == "model timeout"
 
 
 def test_auto_promotion_and_rollback_for_low_risk_candidate(tmp_path: Path) -> None:

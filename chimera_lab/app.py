@@ -336,6 +336,10 @@ def create_app() -> FastAPI:
     def supervisor_run_once(services: AppServices = Depends(get_services)) -> dict[str, Any]:
         return services.autonomy_supervisor.run_once()
 
+    @app.post("/ops/supervisor/compact-backlog", response_model=dict[str, Any])
+    def supervisor_compact_backlog(services: AppServices = Depends(get_services)) -> dict[str, Any]:
+        return services.autonomy_supervisor.compact_backlog()
+
     @app.get("/ops/git/status", response_model=dict[str, Any])
     def git_status(services: AppServices = Depends(get_services)) -> dict[str, Any]:
         return services.git_safety.status()

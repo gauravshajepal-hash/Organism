@@ -54,7 +54,24 @@ class MutationLab:
                     },
                 )
                 candidate_run_ids.append(candidate["id"])
-                self._apply_and_evaluate_candidate(mission, program, candidate, base_run, operator)
+                try:
+                    self._apply_and_evaluate_candidate(mission, program, candidate, base_run, operator)
+                except Exception as exc:  # noqa: BLE001
+                    self.storage.update_task_run(
+                        candidate["id"],
+                        status="failed",
+                        result_summary=f"Mutation staging failed: {exc}"[:500],
+                    )
+                    self.artifact_store.create(
+                        "mutation_candidate_error",
+                        {
+                            "candidate_run_id": candidate["id"],
+                            "operator": operator,
+                            "error": str(exc),
+                        },
+                        source_refs=[candidate["id"], run_id],
+                        created_by="mutation_lab",
+                    )
 
         job = self.storage.create_mutation_job(run_id, strategy, iterations, candidate_run_ids)
         self.artifact_store.create(

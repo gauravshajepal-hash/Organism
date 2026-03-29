@@ -60,19 +60,38 @@ class MetaImprovementExecutor:
             },
         )
         mutation_job = None
-        if auto_stage:
-            mutation_job = self.mutation_lab.stage_job(base_run["id"], execution_plan["strategy"], max(1, iterations), auto_stage=True)
-
         execution = {
             "session_id": session_id,
             "mission_id": mission["id"],
             "program_id": program["id"],
             "base_run_id": base_run["id"],
-            "mutation_job_id": None if mutation_job is None else mutation_job["id"],
             "strategy": execution_plan["strategy"],
             "candidate_files": execution_plan["candidate_files"],
             "command": execution_plan["command"],
+            "status": "created",
         }
+        try:
+            if auto_stage:
+                mutation_job = self.mutation_lab.stage_job(base_run["id"], execution_plan["strategy"], max(1, iterations), auto_stage=True)
+                staged = self.storage.update_task_run(
+                    base_run["id"],
+                    status="staged_for_mutation",
+                    result_summary="Base run staged for mutation candidates.",
+                )
+                execution["base_run_status"] = staged["status"]
+                execution["status"] = "staged"
+            else:
+                execution["base_run_status"] = base_run["status"]
+        except Exception as exc:  # noqa: BLE001
+            failed = self.storage.update_task_run(
+                base_run["id"],
+                status="failed",
+                result_summary=f"Meta improvement staging failed: {exc}"[:500],
+            )
+            execution["base_run_status"] = failed["status"]
+            execution["status"] = "failed"
+            execution["error"] = str(exc)
+        execution["mutation_job_id"] = None if mutation_job is None else mutation_job["id"]
         self.artifact_store.create(
             "meta_improvement_execution",
             execution,
