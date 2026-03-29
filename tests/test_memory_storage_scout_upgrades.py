@@ -48,29 +48,13 @@ def test_analytics_mirror_retries_retryable_duckdb_conflict(tmp_path: Path) -> N
     mirror._duckdb = object()
     calls = {"count": 0}
 
-    def flaky_mirror(table: str, parquet_path: Path | None = None) -> None:  # noqa: ARG001
+    def flaky_mirror_once(table: str, jsonl_path: Path, parquet_path: Path) -> None:  # noqa: ARG001
         calls["count"] += 1
         if calls["count"] == 1:
             raise Exception('TransactionContext Error: Catalog write-write conflict on alter with "Schema\\0main\\0main\\0Table\\0main\\0artifacts"')
 
-    original = mirror._mirror_table
-
-    def wrapped(table: str, parquet_path: Path | None = None) -> None:
-        last_error: Exception | None = None
-        for attempt in range(4):
-            try:
-                flaky_mirror(table, parquet_path)
-                return
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-                if attempt >= 3 or not mirror._is_retryable_duckdb_error(exc):
-                    raise
-        if last_error is not None:
-            raise last_error
-
-    mirror._mirror_table = wrapped  # type: ignore[method-assign]
-    row = mirror.append("artifacts", {"kind": "runtime_crash"})
-    mirror._mirror_table = original  # type: ignore[method-assign]
+    with patch.object(mirror, "_mirror_table_once", side_effect=flaky_mirror_once):
+        row = mirror.append("artifacts", {"kind": "runtime_crash"})
 
     assert row["table"] == "artifacts"
     assert calls["count"] == 2
