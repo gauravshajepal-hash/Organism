@@ -171,3 +171,24 @@ def test_git_checkpoint_blocks_secret_files_and_tokens(tmp_path: Path) -> None:
         text=True,
     ).stdout
     assert ".env" not in staged
+
+
+def test_git_checkpoint_if_needed_reports_clean_noop_and_last_backup(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "README.md").write_text("seed\n", encoding="utf-8")
+
+    client.post("/ops/git/init", json={})
+    first = client.post("/ops/git/checkpoint", json={"reason": "initial-backup", "push": True})
+    assert first.status_code == 200
+    assert first.json()["status"] == "ok"
+
+    services = client.app.state.services
+    noop = services.git_safety.checkpoint_if_needed("supervisor-cycle-pre", push=True)
+    assert noop["status"] == "clean_noop"
+    assert noop["last_backup"]["reason"] == "initial-backup"
+
+    backup_state = client.get("/ops/git/backup-state")
+    assert backup_state.status_code == 200
+    assert backup_state.json()["reason"] == "initial-backup"

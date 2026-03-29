@@ -37,6 +37,7 @@ def test_supervisor_run_once_executes_pending_meta_improvement(tmp_path: Path) -
 
     with (
         patch.object(type(services.arxiv_scheduler), "run_once", return_value={"status": "ok", "force": False}),
+        patch.object(type(services.git_safety), "checkpoint_if_needed", return_value={"status": "clean_noop"}) as checkpoint_mock,
         patch.object(
             type(services.meta_improvement_executor),
             "execute",
@@ -64,6 +65,7 @@ def test_supervisor_run_once_executes_pending_meta_improvement(tmp_path: Path) -
             if item["kind"] == "meta_improvement" and "result" in item and "session_id" in item["result"]
         }
         assert session["id"] in executed_sessions
+        assert checkpoint_mock.call_count >= 2
 
 
 def test_auto_promotion_and_rollback_for_low_risk_candidate(tmp_path: Path) -> None:

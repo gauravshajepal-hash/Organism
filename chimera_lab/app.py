@@ -241,6 +241,7 @@ def create_app() -> FastAPI:
             meta_improvement_executor=meta_improvement_executor,
             run_executor=run_executor,
             rollout_manager=rollout_manager,
+            git_safety=git_safety,
         ),
         vivarium=Vivarium(storage, artifact_store),
         social_vivarium=SocialVivarium(),
@@ -254,6 +255,8 @@ def create_app() -> FastAPI:
     app.state.services = services
 
     services.runtime_guard.begin_session()
+    if services.settings.git_backup_on_startup:
+        services.git_safety.checkpoint_if_needed("startup-backup", push=True)
     if services.settings.background_ingestion_enabled:
         services.arxiv_scheduler.start()
     if services.settings.supervisor_enabled:
@@ -336,6 +339,10 @@ def create_app() -> FastAPI:
     @app.get("/ops/git/status", response_model=dict[str, Any])
     def git_status(services: AppServices = Depends(get_services)) -> dict[str, Any]:
         return services.git_safety.status()
+
+    @app.get("/ops/git/backup-state", response_model=dict[str, Any] | None)
+    def git_backup_state(services: AppServices = Depends(get_services)) -> dict[str, Any] | None:
+        return services.git_safety.last_backup_state()
 
     @app.post("/ops/git/init", response_model=dict[str, Any])
     def git_init(payload: GitInitRequest, services: AppServices = Depends(get_services)) -> dict[str, Any]:

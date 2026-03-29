@@ -12,6 +12,7 @@ from chimera_lab.db import Storage
 from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.arxiv_scheduler import ArxivScheduler
 from chimera_lab.services.evolution_rollout import EvolutionRolloutManager
+from chimera_lab.services.git_safety import GitSafetyService
 from chimera_lab.services.meta_improvement_executor import MetaImprovementExecutor
 from chimera_lab.services.research_evolution import ResearchEvolutionLab
 from chimera_lab.services.run_executor import RunExecutor
@@ -37,6 +38,7 @@ class AutonomySupervisor:
     meta_improvement_executor: MetaImprovementExecutor
     run_executor: RunExecutor
     rollout_manager: EvolutionRolloutManager
+    git_safety: GitSafetyService
     state_path: Path = field(init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
@@ -79,11 +81,17 @@ class AutonomySupervisor:
         self._seed_default_objectives()
         self._sync_meta_objectives()
         self._sync_failure_objectives()
+        backup_before = None
+        if self.settings.git_backup_on_supervisor_cycle:
+            backup_before = self.git_safety.checkpoint_if_needed("supervisor-cycle-pre", push=True)
         arxiv = self.arxiv_scheduler.run_once(force=False)
         objectives = self.storage.next_due_objectives(limit=self.settings.supervisor_objective_limit)
         executions = [self._execute_objective(item) for item in objectives]
         auto_promotions = self.rollout_manager.attempt_auto_promotions(limit=2)
         canaries = self.rollout_manager.run_rollout_canaries(limit=4)
+        backup_after = None
+        if self.settings.git_backup_on_supervisor_cycle:
+            backup_after = self.git_safety.checkpoint_if_needed("supervisor-cycle-post", push=True)
         result = {
             "cycle_at": _utc_now_iso(),
             "arxiv": arxiv,
@@ -91,6 +99,8 @@ class AutonomySupervisor:
             "executions": executions,
             "auto_promotions": auto_promotions,
             "rollout_canaries": canaries,
+            "git_backup_before": backup_before,
+            "git_backup_after": backup_after,
             "runtime": self.runtime_guard.snapshot(),
         }
         self._save_state({"last_cycle_at": result["cycle_at"], "last_result": result})
@@ -166,6 +176,9 @@ class AutonomySupervisor:
         kind = objective["kind"]
         metadata = dict(objective.get("metadata") or {})
         try:
+            backup_before = None
+            if self.settings.git_backup_before_objective:
+                backup_before = self.git_safety.checkpoint_if_needed(f"objective-pre-{objective['id']}", push=True)
             if kind in {"research_ingest", "plan", "repair_failed_run"}:
                 result = self._execute_run_objective(objective)
             elif kind == "meta_improvement":
@@ -173,6 +186,9 @@ class AutonomySupervisor:
                 result = self.meta_improvement_executor.execute(session_id, auto_stage=True, iterations=1)
             else:
                 result = {"status": "skipped", "reason": f"unknown_objective_kind:{kind}"}
+            backup_after = None
+            if self.settings.git_backup_after_objective:
+                backup_after = self.git_safety.checkpoint_if_needed(f"objective-post-{objective['id']}", push=True)
 
             next_run_after = None
             status = "completed"
@@ -183,11 +199,24 @@ class AutonomySupervisor:
             updated = self.storage.update_objective(objective["id"], status=status, next_run_after=next_run_after, metadata=metadata)
             self.artifact_store.create(
                 "objective_execution",
-                {"objective_id": objective["id"], "kind": kind, "result": result},
+                {
+                    "objective_id": objective["id"],
+                    "kind": kind,
+                    "result": result,
+                    "git_backup_before": backup_before,
+                    "git_backup_after": backup_after,
+                },
                 source_refs=[objective["id"]],
                 created_by="autonomy_supervisor",
             )
-            return {"objective_id": objective["id"], "kind": kind, "status": updated["status"], "result": result}
+            return {
+                "objective_id": objective["id"],
+                "kind": kind,
+                "status": updated["status"],
+                "result": result,
+                "git_backup_before": backup_before,
+                "git_backup_after": backup_after,
+            }
         except Exception as exc:  # noqa: BLE001
             updated = self.storage.update_objective(objective["id"], status="failed", metadata={**metadata, "last_error": str(exc)})
             self.runtime_guard.record_exception("objective_execution", str(exc), {"objective_id": objective["id"], "kind": kind}, push_backup=True)

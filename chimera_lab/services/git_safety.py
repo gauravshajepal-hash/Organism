@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,7 @@ class GitSafetyService:
 
     def __post_init__(self) -> None:
         self.repo_root = self.settings.git_root
+        self.state_path = self.settings.data_dir / "runtime" / "git_backup_state.json"
 
     def status(self) -> dict[str, Any]:
         repo_exists = (self.repo_root / ".git").exists()
@@ -111,8 +114,37 @@ class GitSafetyService:
             "push_result": push_result,
             **self.status(),
         }
+        if status in {"ok", "push_reconciled"}:
+            self._write_backup_state(result)
         self._record("git_checkpoint", result)
         return result
+
+    def checkpoint_if_needed(self, reason: str, push: bool | None = None, force: bool = False) -> dict[str, Any]:
+        status = self.status()
+        if not status.get("repo_exists"):
+            result = {"status": "skipped", "reason": reason, "detail": "repo_not_initialized", **status}
+            self._record("git_checkpoint", result)
+            return result
+        if force:
+            return self.checkpoint(reason, push=push)
+        if status.get("dirty"):
+            return self.checkpoint(reason, push=push)
+        last_backup = self.last_backup_state()
+        result = {
+            "status": "clean_noop",
+            "reason": reason,
+            "commit": status.get("head"),
+            "pushed": bool(self.settings.git_auto_push if push is None else push),
+            "last_backup": last_backup,
+            **status,
+        }
+        self._record("git_checkpoint", result)
+        return result
+
+    def last_backup_state(self) -> dict[str, Any] | None:
+        if not self.state_path.exists():
+            return None
+        return json.loads(self.state_path.read_text(encoding="utf-8"))
 
     def revert_commit(self, commit_hash: str, reason: str, push: bool | None = None) -> dict[str, Any]:
         push = self.settings.git_auto_push if push is None else push
@@ -283,3 +315,14 @@ class GitSafetyService:
         reset = self._git(["reset"], check=False)
         if reset.returncode != 0:
             self._git(["rm", "-r", "--cached", "."], check=False)
+
+    def _write_backup_state(self, payload: dict[str, Any]) -> None:
+        state = {
+            "reason": payload.get("reason"),
+            "commit": payload.get("commit"),
+            "branch": payload.get("branch"),
+            "remote_url": payload.get("remote_url"),
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.state_path.write_text(json.dumps(state, ensure_ascii=True, indent=2), encoding="utf-8")

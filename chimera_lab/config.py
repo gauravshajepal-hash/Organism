@@ -43,6 +43,11 @@ class Settings:
     tree_search_parallel_tracks: int
     tree_search_score_decay: float
     git_secret_scan: bool
+    git_backup_on_startup: bool
+    git_backup_before_objective: bool
+    git_backup_after_objective: bool
+    git_backup_on_supervisor_cycle: bool
+    git_backup_interval_seconds: int
     background_ingestion_enabled: bool
     arxiv_poll_interval_seconds: int
     arxiv_cache_ttl_seconds: int
@@ -110,6 +115,11 @@ def load_settings() -> Settings:
         tree_search_parallel_tracks=int(os.getenv("CHIMERA_TREE_SEARCH_PARALLEL_TRACKS", "3")),
         tree_search_score_decay=float(os.getenv("CHIMERA_TREE_SEARCH_SCORE_DECAY", "0.88")),
         git_secret_scan=_env_flag("CHIMERA_GIT_SECRET_SCAN", True),
+        git_backup_on_startup=_env_flag("CHIMERA_GIT_BACKUP_ON_STARTUP", True),
+        git_backup_before_objective=_env_flag("CHIMERA_GIT_BACKUP_BEFORE_OBJECTIVE", True),
+        git_backup_after_objective=_env_flag("CHIMERA_GIT_BACKUP_AFTER_OBJECTIVE", True),
+        git_backup_on_supervisor_cycle=_env_flag("CHIMERA_GIT_BACKUP_ON_SUPERVISOR_CYCLE", True),
+        git_backup_interval_seconds=int(os.getenv("CHIMERA_GIT_BACKUP_INTERVAL_SECONDS", "900")),
         background_ingestion_enabled=_env_flag("CHIMERA_ENABLE_BACKGROUND_INGESTION", background_default),
         arxiv_poll_interval_seconds=int(os.getenv("CHIMERA_ARXIV_POLL_INTERVAL_SECONDS", "1800")),
         arxiv_cache_ttl_seconds=int(os.getenv("CHIMERA_ARXIV_CACHE_TTL_SECONDS", "21600")),
