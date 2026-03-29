@@ -99,6 +99,8 @@ def test_runtime_guard_recovers_unclean_shutdown(tmp_path: Path) -> None:
     os.environ["CHIMERA_GIT_ROOT"] = str(tmp_path / "repo")
     os.environ["CHIMERA_GIT_REMOTE_URL"] = str(remote)
     os.environ["CHIMERA_GIT_AUTOPUSH"] = "0"
+    os.environ.pop("CHIMERA_GIT_MIRROR_REMOTE_URL", None)
+    os.environ.pop("CHIMERA_GIT_MIRROR_REMOTE_NAME", None)
 
     app = create_app()
     client = TestClient(app)
