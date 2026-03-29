@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from chimera_lab.app import create_app
+
+
+def make_client(tmp_path: Path) -> TestClient:
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
+
+    os.environ["CHIMERA_DATA_DIR"] = str(tmp_path / "data")
+    os.environ["CHIMERA_ENABLE_OLLAMA"] = "0"
+    os.environ["CHIMERA_SANDBOX_MODE"] = "local"
+    os.environ["CHIMERA_FRONTIER_PROVIDER"] = "manual"
+    os.environ["CHIMERA_GIT_ROOT"] = str(tmp_path / "repo")
+    os.environ["CHIMERA_GIT_REMOTE_URL"] = str(remote)
+    os.environ["CHIMERA_GIT_BRANCH"] = "main"
+    os.environ["CHIMERA_GIT_AUTOPUSH"] = "1"
+    app = create_app()
+    return TestClient(app)
+
+
+def test_git_init_checkpoint_and_runtime_snapshot(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "README.md").write_text("seed\n", encoding="utf-8")
+
+    init = client.post("/ops/git/init", json={})
+    assert init.status_code == 200
+    assert init.json()["repo_exists"] is True
+
+    runtime = client.get("/ops/runtime")
+    assert runtime.status_code == 200
+    assert runtime.json()["session"]["active"] is True
+
+    (repo_root / "README.md").write_text("seed\nupdated\n", encoding="utf-8")
+    checkpoint = client.post("/ops/git/checkpoint", json={"reason": "initial-backup", "push": True})
+    assert checkpoint.status_code == 200
+    payload = checkpoint.json()
+    assert payload["status"] == "ok"
+    assert payload["commit"]
+    assert payload["push_result"]["returncode"] == 0
+
+    remote_head = subprocess.run(
+        ["git", "--git-dir", str(tmp_path / "remote.git"), "rev-parse", "refs/heads/main"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert remote_head
+
+
+def test_runtime_guard_recovers_unclean_shutdown(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    runtime_dir = data_dir / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "session.json").write_text(
+        json.dumps({"session_id": "session_old", "started_at": "2026-03-29T00:00:00+00:00", "active": True}),
+        encoding="utf-8",
+    )
+    with (runtime_dir / "events.jsonl").open("w", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "event_id": "event_1",
+                    "session_id": "session_old",
+                    "event_type": "run_started",
+                    "details": {"run_id": "run_old"},
+                    "created_at": "2026-03-29T00:01:00+00:00",
+                }
+            )
+        )
+        handle.write("\n")
+
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
+
+    os.environ["CHIMERA_DATA_DIR"] = str(data_dir)
+    os.environ["CHIMERA_ENABLE_OLLAMA"] = "0"
+    os.environ["CHIMERA_SANDBOX_MODE"] = "local"
+    os.environ["CHIMERA_FRONTIER_PROVIDER"] = "manual"
+    os.environ["CHIMERA_GIT_ROOT"] = str(tmp_path / "repo")
+    os.environ["CHIMERA_GIT_REMOTE_URL"] = str(remote)
+    os.environ["CHIMERA_GIT_AUTOPUSH"] = "0"
+
+    app = create_app()
+    client = TestClient(app)
+    runtime = client.get("/ops/runtime")
+    assert runtime.status_code == 200
+    latest_crash = runtime.json()["latest_crash"]
+    assert latest_crash is not None
+    assert latest_crash["kind"] == "unclean_shutdown"
+    assert latest_crash["last_events"][0]["event_type"] == "run_started"

@@ -1,0 +1,25 @@
+[project]
+name = "chimera-lab"
+version = "0.1.0"
+description = "Chimera Lab v1 operator kernel"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.116.1,<1",
+  "httpx>=0.28.1,<1",
+  "jinja2>=3.1.6,<4",
+  "pydantic>=2.11.7,<3",
+  "uvicorn>=0.35.0,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4.1,<9",
+]
+
+[build-system]
+requires = ["setuptools>=80", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

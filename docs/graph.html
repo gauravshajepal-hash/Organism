@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chimera Lab Interactive Graph</title>
+    <meta
+      name="description"
+      content="A read-only graph of Chimera Lab missions, runs, discoveries, artifacts, and related research."
+    />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="public-shell graph-shell">
+      <header class="public-hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Chimera Lab</p>
+          <h1>Interactive Research Graph</h1>
+          <p class="lede">
+            An Obsidian-like public map of missions, programs, runs, discoveries, artifacts, and related work.
+          </p>
+        </div>
+        <nav class="nav-links">
+          <a href="./index.html">Dashboard</a>
+          <a href="./papers/chimera-lab-research-synthesis.html">Research Paper</a>
+          <a href="https://github.com/gauravshajepal-hash/Organism" target="_blank" rel="noreferrer">GitHub Repo</a>
+        </nav>
+      </header>
+
+      <section class="graph-layout">
+        <article class="public-card wide">
+          <div class="graph-header">
+            <div>
+              <p class="card-kicker">Knowledge Map</p>
+              <h2>Public Graph</h2>
+            </div>
+            <div class="graph-legend" id="graphLegend"></div>
+          </div>
+          <svg id="graphCanvas" class="graph-canvas" viewBox="0 0 1400 980" preserveAspectRatio="xMidYMid meet"></svg>
+        </article>
+
+        <aside class="public-card detail-card">
+          <p class="card-kicker">Node Inspection</p>
+          <h2>Node Detail</h2>
+          <div id="graphDetail" class="public-list">
+            <div class="public-item">
+              <strong>No node selected</strong>
+              <p>Click a node to inspect its details and immediate connections.</p>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+    <script src="./graph.js" defer></script>
+  </body>
+</html>

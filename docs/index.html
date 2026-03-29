@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chimera Lab Research Dashboard</title>
+    <meta
+      name="description"
+      content="A one-way public dashboard for Chimera Lab's latest discoveries, concrete outputs, and negative results."
+    />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="public-shell">
+      <header class="public-hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Chimera Lab</p>
+          <h1>Public Research Dashboard</h1>
+          <p class="lede">
+            A static readout of the organism's current work: discoveries, successful outputs, negative results,
+            and the upstream research systems shaping the architecture.
+          </p>
+          <div class="hero-pills">
+            <span class="pill">Read only</span>
+            <span class="pill">One-way export</span>
+            <span class="pill">Public-safe bundle</span>
+          </div>
+        </div>
+        <nav class="nav-links">
+          <a href="./graph.html">Interactive Graph</a>
+          <a href="./papers/chimera-lab-research-synthesis.html">Research Paper</a>
+          <a href="https://github.com/gauravshajepal-hash/Organism" target="_blank" rel="noreferrer">GitHub Repo</a>
+        </nav>
+      </header>
+
+      <section class="public-grid">
+        <article class="public-card">
+          <p class="card-kicker">Snapshot</p>
+          <h2>System Stats</h2>
+          <div id="statsGrid" class="stat-grid"></div>
+        </article>
+
+        <article class="public-card">
+          <p class="card-kicker">Live Output</p>
+          <h2>Latest Research</h2>
+          <div id="latestResearch" class="public-list"></div>
+        </article>
+
+        <article class="public-card">
+          <p class="card-kicker">Discovery</p>
+          <h2>Top Discoveries</h2>
+          <div id="discoveries" class="public-list"></div>
+        </article>
+      </section>
+
+      <section class="public-grid">
+        <article class="public-card wide">
+          <p class="card-kicker">Concrete Output</p>
+          <h2>Positive Results</h2>
+          <div id="positiveResults" class="public-list"></div>
+        </article>
+
+        <article class="public-card wide">
+          <p class="card-kicker">Failure Record</p>
+          <h2>Negative Results</h2>
+          <div id="negativeResults" class="public-list"></div>
+        </article>
+      </section>
+
+      <section class="public-grid">
+        <article class="public-card wide">
+          <p class="card-kicker">Context</p>
+          <h2>Related Research</h2>
+          <div id="relatedWork" class="public-list"></div>
+        </article>
+
+        <article class="public-card">
+          <p class="card-kicker">Publication Contract</p>
+          <h2>Readout Mode</h2>
+          <div id="publicationMode" class="public-list"></div>
+        </article>
+      </section>
+
+      <footer class="public-footer">
+        <p>
+          This site is generated from organism state and published outward. It is not an operator console and it does
+          not send instructions back into Chimera Lab.
+        </p>
+      </footer>
+    </main>
+    <script src="./dashboard.js" defer></script>
+  </body>
+</html>
