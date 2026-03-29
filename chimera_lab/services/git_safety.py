@@ -228,12 +228,12 @@ class GitSafetyService:
         text = result.stdout
         patterns = [
             ("openai_key", re.compile(r"sk-[A-Za-z0-9]{20,}")),
-            ("gemini_key", re.compile(r"AIza[0-9A-Za-z\\-_]{20,}")),
+            ("gemini_key", re.compile(r"AIza[0-9A-Za-z\-_]{20,}")),
             ("github_pat", re.compile(r"github_pat_[A-Za-z0-9_]{20,}")),
             ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}")),
-            ("bearer_token", re.compile(r"Bearer\\s+[A-Za-z0-9._-]{20,}", re.IGNORECASE)),
-            ("openai_env", re.compile(r"OPENAI_API_KEY\\s*[:=]\\s*['\\\"]?[A-Za-z0-9_-]{16,}", re.IGNORECASE)),
-            ("gemini_env", re.compile(r"GEMINI_API_KEY\\s*[:=]\\s*['\\\"]?[A-Za-z0-9_-]{16,}", re.IGNORECASE)),
+            ("bearer_token", re.compile(r"Bearer\s+[A-Za-z0-9._-]{20,}", re.IGNORECASE)),
+            ("openai_env", re.compile(r"OPENAI_API_KEY\s*[:=]\s*['\"]?[A-Za-z0-9_-]{16,}", re.IGNORECASE)),
+            ("gemini_env", re.compile(r"GEMINI_API_KEY\s*[:=]\s*['\"]?[A-Za-z0-9_-]{16,}", re.IGNORECASE)),
         ]
         findings: list[dict[str, str]] = []
         for label, pattern in patterns:
