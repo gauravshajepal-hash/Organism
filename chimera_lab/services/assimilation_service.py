@@ -176,14 +176,14 @@ class AssimilationService:
             recommended_action = "stage_meta_improvement"
             focus = "source_quality_gates"
             reasons.append("Self-correcting evidence grading maps directly onto scout/research reliability.")
-        elif "quality gates" in text or "circuit breaker" in text or "research" in text and "plan" in text and "implement" in text:
-            recommended_action = "stage_meta_improvement"
-            focus = "pipeline_quality_gates"
-            reasons.append("Workflow gates and bounded retries map onto run automation and review.")
         elif "benchmark" in text or "gym" in text or "trajectory visualizer" in text:
             recommended_action = "benchmark_only"
             focus = "research_benchmarks"
             reasons.append("Benchmark ideas should improve evaluation before they change runtime behavior.")
+        elif "quality gates" in text or "circuit breaker" in text or "research" in text and "plan" in text and "implement" in text:
+            recommended_action = "stage_meta_improvement"
+            focus = "pipeline_quality_gates"
+            reasons.append("Workflow gates and bounded retries map onto run automation and review.")
         elif "ruby" in text or "rubyllm" in text:
             recommended_action = "reference_only"
             focus = "orchestration_reference"
