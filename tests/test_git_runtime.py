@@ -259,8 +259,8 @@ def test_git_checkpoint_pushes_to_mirror_and_creates_backup_tag(tmp_path: Path) 
     init = client.post("/ops/git/init", json={})
     assert init.status_code == 200
     init_payload = init.json()
-    assert init_payload["remotes"]["origin"] == str(tmp_path / "remote.git")
-    assert init_payload["remotes"]["mirror"] == str(tmp_path / "mirror.git")
+    assert init_payload["remotes"]["origin"] == (tmp_path / "remote.git").resolve().as_posix()
+    assert init_payload["remotes"]["mirror"] == (tmp_path / "mirror.git").resolve().as_posix()
 
     checkpoint = client.post("/ops/git/checkpoint", json={"reason": "mirror-backup", "push": True})
     assert checkpoint.status_code == 200
@@ -314,4 +314,4 @@ def test_git_checkpoint_pushes_to_mirror_and_creates_backup_tag(tmp_path: Path) 
     assert backup_state.status_code == 200
     state = backup_state.json()
     assert state["tag_result"]["tag"] == tag_name
-    assert state["remotes"]["mirror"] == str(tmp_path / "mirror.git")
+    assert state["remotes"]["mirror"] == (tmp_path / "mirror.git").resolve().as_posix()
