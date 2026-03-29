@@ -207,6 +207,49 @@ def test_live_scout_search_tolerates_partial_source_failure(tmp_path: Path) -> N
     assert payload[0]["source_ref"] == "https://github.com/example/repo"
 
 
+def test_live_scout_search_softly_downranks_legal_noise(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    service = client.app.state.services.scout_service
+    service._search_github = lambda query, per_source: [  # noqa: ARG005
+        service.intake(
+            "github",
+            "https://github.com/example/legal-noise",
+            "Legal example about landlord tenant workflow and court process.",
+            0.92,
+            0.9,
+            "MIT",
+        ),
+        service.intake(
+            "github",
+            "https://github.com/example/agent-memory",
+            "Agent memory workflow for retrieval and research planning.",
+            0.78,
+            0.88,
+            "MIT",
+        ),
+    ]
+    service._search_arxiv = lambda query, per_source: [  # noqa: ARG005
+        service.intake(
+            "paper",
+            "https://arxiv.org/abs/9999.0001",
+            "Research paper on agent memory retrieval systems.",
+            0.74,
+            0.84,
+            "arXiv",
+        )
+    ]
+
+    response = client.post("/scout/search-live", json={"query": "agent memory research workflow", "per_source": 3})
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 3
+    assert payload[0]["source_ref"] in {
+        "https://github.com/example/agent-memory",
+        "https://arxiv.org/abs/9999.0001",
+    }
+    assert payload[-1]["source_ref"] == "https://github.com/example/legal-noise"
+
+
 def test_skills_research_mutation_and_vivarium(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     mission_id, program_id = create_seed_objects(client)
