@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: chimera-lab
+Version: 0.1.0
+Summary: Chimera Lab v1 operator kernel
+Requires-Python: >=3.12
+Requires-Dist: fastapi<1,>=0.116.1
+Requires-Dist: httpx<1,>=0.28.1
+Requires-Dist: jinja2<4,>=3.1.6
+Requires-Dist: pypdf<6,>=5.4.0
+Requires-Dist: pydantic<3,>=2.11.7
+Requires-Dist: uvicorn<1,>=0.35.0
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8.4.1; extra == "dev"

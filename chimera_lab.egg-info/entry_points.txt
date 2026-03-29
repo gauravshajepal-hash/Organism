@@ -1,0 +1,2 @@
+[console_scripts]
+organism = chimera_lab.cli:main

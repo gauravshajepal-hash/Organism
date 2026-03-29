@@ -24,6 +24,13 @@ organism = "chimera_lab.cli:main"
 requires = ["setuptools>=80", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+py-modules = ["organism"]
+
+[tool.setuptools.packages.find]
+include = ["chimera_lab*"]
+exclude = ["data*", "skills*", "EdgeClaw*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
