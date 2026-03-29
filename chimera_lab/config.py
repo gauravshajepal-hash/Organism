@@ -42,10 +42,19 @@ class Settings:
     tree_search_parallel_tracks: int
     tree_search_score_decay: float
     git_secret_scan: bool
+    background_ingestion_enabled: bool
+    arxiv_poll_interval_seconds: int
+    arxiv_cache_ttl_seconds: int
+    arxiv_backoff_base_seconds: int
+    arxiv_backoff_max_seconds: int
+    arxiv_max_results_per_query: int
+    arxiv_digest_top_n: int
+    arxiv_default_queries: list[str]
 
 
 def load_settings() -> Settings:
     base = Path(os.getenv("CHIMERA_DATA_DIR", "data")).resolve()
+    background_default = os.getenv("PYTEST_CURRENT_TEST") is None
     scout_seed_urls = [
         item.strip()
         for item in os.getenv(
@@ -93,4 +102,25 @@ def load_settings() -> Settings:
         tree_search_parallel_tracks=int(os.getenv("CHIMERA_TREE_SEARCH_PARALLEL_TRACKS", "3")),
         tree_search_score_decay=float(os.getenv("CHIMERA_TREE_SEARCH_SCORE_DECAY", "0.88")),
         git_secret_scan=_env_flag("CHIMERA_GIT_SECRET_SCAN", True),
+        background_ingestion_enabled=_env_flag("CHIMERA_ENABLE_BACKGROUND_INGESTION", background_default),
+        arxiv_poll_interval_seconds=int(os.getenv("CHIMERA_ARXIV_POLL_INTERVAL_SECONDS", "1800")),
+        arxiv_cache_ttl_seconds=int(os.getenv("CHIMERA_ARXIV_CACHE_TTL_SECONDS", "21600")),
+        arxiv_backoff_base_seconds=int(os.getenv("CHIMERA_ARXIV_BACKOFF_BASE_SECONDS", "300")),
+        arxiv_backoff_max_seconds=int(os.getenv("CHIMERA_ARXIV_BACKOFF_MAX_SECONDS", "21600")),
+        arxiv_max_results_per_query=int(os.getenv("CHIMERA_ARXIV_MAX_RESULTS_PER_QUERY", "5")),
+        arxiv_digest_top_n=int(os.getenv("CHIMERA_ARXIV_DIGEST_TOP_N", "2")),
+        arxiv_default_queries=[
+            item.strip()
+            for item in os.getenv(
+                "CHIMERA_ARXIV_DEFAULT_QUERIES",
+                ",".join(
+                    [
+                        "research agents memory coding loops benchmark evaluation",
+                        "agent memory retrieval benchmark graph rag evaluation",
+                        "self improving coding agents workflow guardrails quality gates",
+                    ]
+                ),
+            ).split(",")
+            if item.strip()
+        ],
     )

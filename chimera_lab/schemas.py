@@ -307,6 +307,18 @@ class AssimilationEvaluateCreate(BaseModel):
     auto_stage: bool = False
 
 
+class ArxivIngestCreate(BaseModel):
+    query: str
+    max_results: int | None = None
+    force: bool = False
+    digest_top_n: int | None = None
+
+
+class MetaImprovementExecuteCreate(BaseModel):
+    auto_stage: bool = True
+    iterations: int = 1
+
+
 class TreeSearchCreate(BaseModel):
     program_id: str
     question: str

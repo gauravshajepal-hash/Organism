@@ -276,6 +276,12 @@ class ResearchEvolutionLab:
     def list_meta_improvements(self) -> list[dict[str, Any]]:
         return _load_json(self.meta_path, [])
 
+    def get_meta_improvement(self, session_id: str) -> dict[str, Any] | None:
+        for session in self.list_meta_improvements():
+            if session.get("id") == session_id:
+                return session
+        return None
+
     def create_merge_recipe(self, name: str, base_model: str, sources: list[str], objective: str) -> dict[str, Any]:
         weights = self._normalized_weights(len(sources))
         recipe = {

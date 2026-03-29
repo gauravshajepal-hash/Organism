@@ -12,6 +12,7 @@ from chimera_lab.config import Settings, load_settings
 from chimera_lab.db import Storage
 from chimera_lab.schemas import (
     AssimilationEvaluateCreate,
+    ArxivIngestCreate,
     Artifact,
     AutoresearchCreate,
     BudgetTransferCreate,
@@ -31,6 +32,7 @@ from chimera_lab.schemas import (
     MergeRecipeCreate,
     MergeRecordCreate,
     MetaImprovementCreate,
+    MetaImprovementExecuteCreate,
     Mission,
     MissionCreate,
     PolicyDecision,
@@ -66,6 +68,7 @@ from chimera_lab.schemas import (
 )
 from chimera_lab.services.analytics_mirror import AnalyticsMirror
 from chimera_lab.services.assimilation_service import AssimilationService
+from chimera_lab.services.arxiv_scheduler import ArxivScheduler
 from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.channel_gateway import ChannelGateway
 from chimera_lab.services.company_layer import AutonomousCompany
@@ -74,6 +77,7 @@ from chimera_lab.services.git_safety import GitSafetyService
 from chimera_lab.services.local_worker import LocalWorker
 from chimera_lab.services.memory_tiers import MemoryTierOrchestrator
 from chimera_lab.services.memory_service import MemoryService
+from chimera_lab.services.meta_improvement_executor import MetaImprovementExecutor
 from chimera_lab.services.model_merge_registry import ModelMergeRegistry
 from chimera_lab.services.mission_cortex import MissionCortex
 from chimera_lab.services.model_router import ModelRouter
@@ -81,6 +85,7 @@ from chimera_lab.services.mutation_guardrails import MutationGuardrails
 from chimera_lab.services.mutation_lab import MutationLab
 from chimera_lab.services.policy_service import PolicyService
 from chimera_lab.services.publication_service import PublicationService
+from chimera_lab.services.paper_digest_service import PaperDigestService
 from chimera_lab.services.research_evolution import ResearchEvolutionLab
 from chimera_lab.services.research_organs import ResearchOrgans
 from chimera_lab.services.review_tribunal import ReviewTribunal
@@ -106,6 +111,8 @@ class AppServices:
     scout_service: ScoutService
     scout_feed_registry: ScoutFeedRegistry
     assimilation_service: AssimilationService
+    paper_digest_service: PaperDigestService
+    arxiv_scheduler: ArxivScheduler
     skill_registry: SkillRegistry
     policy_service: PolicyService
     review_tribunal: ReviewTribunal
@@ -116,6 +123,7 @@ class AppServices:
     run_automation: RunAutomation
     research_organs: ResearchOrgans
     research_evolution_lab: ResearchEvolutionLab
+    meta_improvement_executor: MetaImprovementExecutor
     merge_registry: ModelMergeRegistry
     mutation_lab: MutationLab
     vivarium: Vivarium
@@ -145,9 +153,19 @@ def create_app() -> FastAPI:
     local_worker = LocalWorker(settings, artifact_store, sandbox_runner, skill_registry=skill_registry)
     mutation_guardrails = MutationGuardrails(settings)
     memory_tiers = MemoryTierOrchestrator()
+    paper_digest_service = PaperDigestService(settings, scout_service, artifact_store, memory_tiers=memory_tiers)
     publication_service = PublicationService(settings, storage, analytics_mirror=analytics_mirror)
     git_safety = GitSafetyService(settings, artifact_store)
     runtime_guard = RuntimeGuard(settings, artifact_store, git_safety=git_safety)
+    arxiv_scheduler = ArxivScheduler(settings, storage, artifact_store, paper_digest_service, runtime_guard)
+    mutation_lab = MutationLab(
+        storage,
+        artifact_store,
+        local_worker=local_worker,
+        sandbox_runner=sandbox_runner,
+        guardrails=mutation_guardrails,
+    )
+    meta_improvement_executor = MetaImprovementExecutor(settings, storage, artifact_store, research_evolution_lab, mutation_lab=mutation_lab)
     services = AppServices(
         settings=settings,
         storage=storage,
@@ -159,6 +177,8 @@ def create_app() -> FastAPI:
         scout_service=scout_service,
         scout_feed_registry=scout_feed_registry,
         assimilation_service=assimilation_service,
+        paper_digest_service=paper_digest_service,
+        arxiv_scheduler=arxiv_scheduler,
         skill_registry=skill_registry,
         policy_service=PolicyService(storage),
         review_tribunal=ReviewTribunal(storage, artifact_store),
@@ -178,14 +198,9 @@ def create_app() -> FastAPI:
         ),
         research_organs=ResearchOrgans(storage, artifact_store, model_router, scout_service=scout_service),
         research_evolution_lab=research_evolution_lab,
+        meta_improvement_executor=meta_improvement_executor,
         merge_registry=ModelMergeRegistry(),
-        mutation_lab=MutationLab(
-            storage,
-            artifact_store,
-            local_worker=local_worker,
-            sandbox_runner=sandbox_runner,
-            guardrails=mutation_guardrails,
-        ),
+        mutation_lab=mutation_lab,
         vivarium=Vivarium(storage, artifact_store),
         social_vivarium=SocialVivarium(),
         company=AutonomousCompany(owner_name="human", starting_cash=500.0),
@@ -198,6 +213,8 @@ def create_app() -> FastAPI:
     app.state.services = services
 
     services.runtime_guard.begin_session()
+    if services.settings.background_ingestion_enabled:
+        services.arxiv_scheduler.start()
 
     static_dir = Path(__file__).resolve().parent / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -217,6 +234,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("shutdown")
     def close_runtime_session() -> None:
+        services.arxiv_scheduler.stop()
         services.runtime_guard.finish_session()
 
     def get_services() -> AppServices:
@@ -238,6 +256,22 @@ def create_app() -> FastAPI:
     @app.get("/ops/runtime", response_model=dict[str, Any])
     def runtime_snapshot(services: AppServices = Depends(get_services)) -> dict[str, Any]:
         return services.runtime_guard.snapshot()
+
+    @app.get("/ops/arxiv/status", response_model=dict[str, Any])
+    def arxiv_status(services: AppServices = Depends(get_services)) -> dict[str, Any]:
+        return services.arxiv_scheduler.snapshot()
+
+    @app.post("/ops/arxiv/start", response_model=dict[str, Any])
+    def arxiv_start(services: AppServices = Depends(get_services)) -> dict[str, Any]:
+        return services.arxiv_scheduler.start()
+
+    @app.post("/ops/arxiv/stop", response_model=dict[str, Any])
+    def arxiv_stop(services: AppServices = Depends(get_services)) -> dict[str, Any]:
+        return services.arxiv_scheduler.stop()
+
+    @app.post("/ops/arxiv/run-once", response_model=dict[str, Any])
+    def arxiv_run_once(services: AppServices = Depends(get_services)) -> dict[str, Any]:
+        return services.arxiv_scheduler.run_once(force=True)
 
     @app.get("/ops/git/status", response_model=dict[str, Any])
     def git_status(services: AppServices = Depends(get_services)) -> dict[str, Any]:
@@ -544,6 +578,19 @@ def create_app() -> FastAPI:
     def search_live_scout(payload: ScoutSearchRequest, services: AppServices = Depends(get_services)) -> list[ScoutCandidate]:
         return [ScoutCandidate.model_validate(item) for item in services.scout_service.search_live_sources(payload.query, payload.per_source)]
 
+    @app.post("/papers/arxiv/ingest", response_model=dict[str, Any])
+    def ingest_arxiv(payload: ArxivIngestCreate, services: AppServices = Depends(get_services)) -> dict[str, Any]:
+        return services.paper_digest_service.ingest_query(
+            payload.query,
+            max_results=payload.max_results,
+            force=payload.force,
+            digest_top_n=payload.digest_top_n,
+        )
+
+    @app.get("/papers/digests", response_model=list[dict[str, Any]])
+    def list_paper_digests(services: AppServices = Depends(get_services)) -> list[dict[str, Any]]:
+        return services.paper_digest_service.list_digests()
+
     @app.get("/scout/feeds/catalog", response_model=list[dict[str, Any]])
     def scout_feed_catalog(services: AppServices = Depends(get_services)) -> list[dict[str, Any]]:
         return services.scout_feed_registry.catalog()
@@ -638,6 +685,13 @@ def create_app() -> FastAPI:
     @app.get("/research/meta-improvements", response_model=list[dict[str, Any]])
     def list_meta_improvements(services: AppServices = Depends(get_services)) -> list[dict[str, Any]]:
         return services.research_evolution_lab.list_meta_improvements()
+
+    @app.post("/research/meta-improvements/{session_id}/execute", response_model=dict[str, Any])
+    def execute_meta_improvement(session_id: str, payload: MetaImprovementExecuteCreate, services: AppServices = Depends(get_services)) -> dict[str, Any]:
+        try:
+            return services.meta_improvement_executor.execute(session_id, auto_stage=payload.auto_stage, iterations=payload.iterations)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Meta improvement session not found") from exc
 
     @app.post("/merges/models", response_model=dict[str, Any])
     def register_merge_model(payload: MergeModelCreate, services: AppServices = Depends(get_services)) -> dict[str, Any]:
