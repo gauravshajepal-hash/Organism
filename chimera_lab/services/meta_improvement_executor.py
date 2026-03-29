@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -100,18 +101,67 @@ class MetaImprovementExecutor:
         self.artifact_store.create(
             "meta_improvement_execution",
             execution,
-            source_refs=[session_id, mission["id"], program["id"], base_run["id"]] + ([] if mutation_job is None else [mutation_job["id"]]),
+            source_refs=[session_id, mission["id"], program["id"], base_run["id"], *source_refs] + ([] if mutation_job is None else [mutation_job["id"]]),
             created_by="meta_improvement_executor",
         )
         return execution
 
     def _source_refs_for_session(self, session_id: str) -> list[str]:
-        refs: list[str] = []
+        session = self.research_evolution_lab.get_meta_improvement(session_id)
+        refs: list[str] = list(dict.fromkeys((session or {}).get("source_refs") or []))
         for artifact in self.artifact_store.list_for_source_ref(session_id, limit=50):
             for source_ref in artifact.get("source_refs", []):
                 if source_ref and source_ref != session_id and not source_ref.startswith(("meta_", "artifact_", "mission_", "program_", "run_", "mutation_")):
                     refs.append(str(source_ref))
+        if not refs and session:
+            refs.extend(self._infer_source_refs(session))
         return list(dict.fromkeys(refs))[:10]
+
+    def _infer_source_refs(self, session: dict[str, Any]) -> list[str]:
+        tokens = self._keyword_tokens(" ".join([str(session.get("target") or ""), str(session.get("objective") or "")]))
+        if not tokens:
+            return []
+        scored: list[tuple[float, str]] = []
+        for candidate in self.storage.list_scout_candidates():
+            text = " ".join(
+                [
+                    str(candidate.get("source_ref") or ""),
+                    str(candidate.get("summary") or ""),
+                ]
+            ).lower()
+            overlap = sum(1 for token in tokens if token in text)
+            if overlap <= 0:
+                continue
+            trust = float(candidate.get("trust_score") or 0.5)
+            novelty = float(candidate.get("novelty_score") or 0.5)
+            score = (overlap / max(1, len(tokens))) * 0.7 + trust * 0.2 + novelty * 0.1
+            scored.append((score, str(candidate["source_ref"])))
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        return [source_ref for _, source_ref in scored[:5]]
+
+    def _keyword_tokens(self, text: str) -> list[str]:
+        ignore = {
+            "absorb",
+            "improve",
+            "improvement",
+            "patterns",
+            "pattern",
+            "from",
+            "into",
+            "self",
+            "system",
+            "service",
+            "lab",
+            "chimera",
+        }
+        tokens = [token for token in re.findall(r"[A-Za-z0-9_]{3,}", text.lower()) if token not in ignore]
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for token in tokens:
+            if token not in seen:
+                seen.add(token)
+                deduped.append(token)
+        return deduped[:12]
 
     def _execution_plan(self, session: dict[str, Any]) -> dict[str, Any]:
         target = str(session.get("target") or "")

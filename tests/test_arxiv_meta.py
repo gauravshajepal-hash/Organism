@@ -115,6 +115,69 @@ def test_arxiv_scheduler_uses_recent_queries(tmp_path: Path) -> None:
         assert any("agent memory verification and coding loops" in query.lower() for query in seen_queries)
 
 
+def test_arxiv_backoff_is_per_query_with_curated_fallback(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    service = client.app.state.services.paper_digest_service
+
+    def fake_fetch(query, max_results):  # noqa: ARG001
+        if "memory" in query:
+            raise RuntimeError("429 Too Many Requests")
+        return [
+            {
+                "id": "paper_success",
+                "source_type": "paper",
+                "source_ref": "https://arxiv.org/abs/2601.00002",
+                "title": "Reliable Paper",
+                "summary": "A paper about evaluation loops.",
+                "novelty_score": 0.79,
+                "trust_score": 0.86,
+                "license": "arXiv",
+                "pdf_url": "https://arxiv.org/pdf/2601.00002.pdf",
+                "published": "2026-01-01T00:00:00Z",
+            }
+        ]
+
+    with (
+        patch.object(type(service), "_fetch_arxiv_entries", side_effect=fake_fetch),
+        patch.object(
+            type(service),
+            "_fallback_curated_entries",
+            return_value=[
+                {
+                    "id": "paper_fallback",
+                    "source_type": "paper",
+                    "source_ref": "https://arxiv.org/abs/2601.09999",
+                    "title": "Fallback Paper",
+                    "summary": "Curated fallback result.",
+                    "novelty_score": 0.7,
+                    "trust_score": 0.8,
+                    "license": "arXiv",
+                    "pdf_url": "https://arxiv.org/pdf/2601.09999.pdf",
+                    "published": "",
+                }
+            ],
+        ),
+    ):
+        failed = client.post(
+            "/papers/arxiv/ingest",
+            json={"query": "agent memory", "max_results": 3, "force": True, "digest_top_n": 0},
+        )
+        assert failed.status_code == 200
+        failed_payload = failed.json()
+        assert failed_payload["backoff_active"] is True
+        assert failed_payload["fallback_used"] is True
+        assert failed_payload["results"][0]["source_ref"] == "https://arxiv.org/abs/2601.09999"
+
+        succeeded = client.post(
+            "/papers/arxiv/ingest",
+            json={"query": "evaluation loops", "max_results": 3, "force": False, "digest_top_n": 0},
+        )
+        assert succeeded.status_code == 200
+        succeeded_payload = succeeded.json()
+        assert succeeded_payload["backoff_active"] is False
+        assert succeeded_payload["results"][0]["source_ref"] == "https://arxiv.org/abs/2601.00002"
+
+
 def test_execute_meta_improvement_creates_mutation_job(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     session = client.post(
@@ -150,6 +213,55 @@ def test_execute_meta_improvement_creates_mutation_job(tmp_path: Path) -> None:
     run_payload = run.json()
     assert run_payload["input_payload"]["meta_improvement_session_id"] == session["id"]
     assert run_payload["input_payload"]["mutation_candidate_files"]
+
+
+def test_meta_improvement_execution_infers_source_refs_and_records_feedback(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    client.post(
+        "/scout/intake",
+        json={
+            "source_type": "github",
+            "source_ref": "https://github.com/example/source-quality",
+            "summary": "Source grading self correction patterns for scout reliability and evidence quality.",
+            "novelty_score": 0.82,
+            "trust_score": 0.84,
+            "license": "MIT",
+        },
+    )
+    session = client.post(
+        "/research/meta-improvements",
+        json={
+            "target": "scout_service",
+            "objective": "Absorb source grading and self-correction patterns",
+            "candidate_count": 2,
+        },
+    ).json()
+
+    client.app.state.services.mutation_lab.stage_job = lambda run_id, strategy, iterations, auto_stage=True: {  # type: ignore[method-assign]
+        "id": "mutation_stub",
+        "run_id": run_id,
+        "strategy": strategy,
+        "iterations": iterations,
+        "status": "staged",
+        "candidate_run_ids": [],
+        "created_at": "2026-03-29T00:00:00+00:00",
+        "updated_at": "2026-03-29T00:00:00+00:00",
+    }
+
+    response = client.post(
+        f"/research/meta-improvements/{session['id']}/execute",
+        json={"auto_stage": True, "iterations": 1},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "https://github.com/example/source-quality" in payload["source_refs"]
+
+    run = client.get(f"/runs/{payload['base_run_id']}").json()
+    assert "https://github.com/example/source-quality" in run["input_payload"]["meta_improvement_source_refs"]
+
+    feedback = client.app.state.services.storage.get_scout_feedback("https://github.com/example/source-quality")
+    assert feedback is not None
+    assert feedback["staged_count"] >= 1
 
 
 def test_prepare_worktree_ignores_nested_worktrees(tmp_path: Path) -> None:

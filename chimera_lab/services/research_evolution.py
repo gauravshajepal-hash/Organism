@@ -237,7 +237,7 @@ class ResearchEvolutionLab:
     def list_autoresearch_runs(self) -> list[dict[str, Any]]:
         return _load_json(self.autoresearch_path, [])
 
-    def stage_meta_improvement(self, target: str, objective: str, candidate_count: int = 3) -> dict[str, Any]:
+    def stage_meta_improvement(self, target: str, objective: str, candidate_count: int = 3, source_refs: list[str] | None = None) -> dict[str, Any]:
         candidates = []
         for index in range(candidate_count):
             candidates.append(
@@ -254,6 +254,7 @@ class ResearchEvolutionLab:
             "id": _new_id("meta"),
             "target": target,
             "objective": objective,
+            "source_refs": list(dict.fromkeys(source_refs or [])),
             "candidates": candidates,
             "winner": max(candidates, key=lambda item: item["score"]),
         }
@@ -267,8 +268,9 @@ class ResearchEvolutionLab:
                 "target": target,
                 "objective": objective,
                 "winner_id": session["winner"]["id"],
+                "source_refs": session["source_refs"],
             },
-            source_refs=[session["id"]],
+            source_refs=[session["id"], *session["source_refs"]],
             created_by="research_evolution",
         )
         return session

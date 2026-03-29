@@ -52,11 +52,14 @@ class ArxivScheduler:
         return self.snapshot()
 
     def run_once(self, force: bool = False) -> dict[str, Any]:
-        queries = self._queries()
+        state = self._read_state()
+        all_queries = self._queries()
+        queries, next_cursor = self._cycle_queries(all_queries, int(state.get("query_cursor", 0)))
         cycle = {
             "ran_at": int(time.time()),
             "force": force,
             "queries": queries,
+            "query_pool_size": len(all_queries),
             "results": [],
         }
         for query in queries:
@@ -76,7 +79,7 @@ class ArxivScheduler:
                 }
             )
         state = self._read_state()
-        state.update({"last_cycle_at": cycle["ran_at"], "last_result": cycle, "running": bool(state.get("running", False))})
+        state.update({"last_cycle_at": cycle["ran_at"], "last_result": cycle, "running": bool(state.get("running", False)), "query_cursor": next_cursor})
         self._write_state(state)
         self.artifact_store.create(
             "arxiv_scheduler_cycle",
@@ -120,6 +123,16 @@ class ArxivScheduler:
             if query and query not in queries:
                 queries.append(query)
         return queries[:8]
+
+    def _cycle_queries(self, queries: list[str], cursor: int) -> tuple[list[str], int]:
+        if not queries:
+            return [], 0
+        limit = max(1, min(self.settings.arxiv_queries_per_cycle, len(queries)))
+        start = cursor % len(queries)
+        ordered = queries[start:] + queries[:start]
+        selected = ordered[:limit]
+        next_cursor = (start + limit) % len(queries)
+        return selected, next_cursor
 
     def _read_state(self) -> dict[str, Any]:
         if not self.state_path.exists():

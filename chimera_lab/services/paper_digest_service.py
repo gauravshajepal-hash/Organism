@@ -49,18 +49,23 @@ class PaperDigestService:
     def ingest_query(self, query: str, max_results: int | None = None, force: bool = False, digest_top_n: int | None = None) -> dict[str, Any]:
         max_results = max_results or self.settings.arxiv_max_results_per_query
         digest_top_n = self.settings.arxiv_digest_top_n if digest_top_n is None else digest_top_n
+        query_plan = self.scout_service.build_query_plan(query)
+        fetch_query = query_plan["compact_query"] or query
         query_key = _slug(query.lower().strip())
         search_cache = self._load_json(self.search_cache_path, {})
         cached = search_cache.get(query_key)
-        backoff = self._load_json(self.backoff_path, {"consecutive_failures": 0, "backoff_until": 0, "last_error": None})
+        backoff = self._backoff_state(query_key)
 
         if not force and backoff.get("backoff_until", 0) > _now_ts():
+            fallback_results = list(cached.get("results", [])) if cached else self._fallback_curated_entries(query, max_results)
             result = {
                 "query": query,
+                "fetch_query": fetch_query,
                 "cached": bool(cached),
                 "backoff_active": True,
                 "backoff_until": backoff.get("backoff_until", 0),
-                "results": list(cached.get("results", [])) if cached else [],
+                "results": fallback_results,
+                "fallback_used": bool(not cached and fallback_results),
             }
             self.artifact_store.create(
                 "arxiv_ingestion_skipped",
@@ -73,14 +78,16 @@ class PaperDigestService:
         if not force and cached and (_now_ts() - int(cached.get("fetched_at", 0))) <= self.settings.arxiv_cache_ttl_seconds:
             return {
                 "query": query,
+                "fetch_query": fetch_query,
                 "cached": True,
                 "backoff_active": False,
                 "results": list(cached.get("results", [])),
                 "digests": list(cached.get("digests", [])),
+                "fallback_used": False,
             }
 
         try:
-            results = self._fetch_arxiv_entries(query, max_results=max_results)
+            results = self._fetch_arxiv_entries(fetch_query, max_results=max_results)
             digests = []
             for item in results:
                 self.scout_service.intake(
@@ -102,23 +109,27 @@ class PaperDigestService:
                 digests.append(self.digest_paper(item["source_ref"], pdf_url=item["pdf_url"], title=item["title"], force=force))
             search_cache[query_key] = {
                 "query": query,
+                "fetch_query": fetch_query,
                 "fetched_at": _now_ts(),
                 "results": results,
                 "digests": [{"source_ref": item["source_ref"], "digest_id": item["id"]} for item in digests],
             }
             self._save_json(self.search_cache_path, search_cache)
-            self._reset_backoff()
+            self._reset_backoff(query_key)
             result = {
                 "query": query,
+                "fetch_query": fetch_query,
                 "cached": False,
                 "backoff_active": False,
                 "results": results,
                 "digests": digests,
+                "fallback_used": False,
             }
             self.artifact_store.create(
                 "arxiv_ingestion_cycle",
                 {
                     "query": query,
+                    "fetch_query": fetch_query,
                     "result_count": len(results),
                     "digest_count": len(digests),
                     "cached": False,
@@ -128,14 +139,17 @@ class PaperDigestService:
             )
             return result
         except Exception as exc:  # noqa: BLE001
-            state = self._register_backoff(str(exc))
+            state = self._register_backoff(query_key, str(exc))
+            fallback_results = list(cached.get("results", [])) if cached else self._fallback_curated_entries(query, max_results)
             result = {
                 "query": query,
+                "fetch_query": fetch_query,
                 "cached": bool(cached),
                 "backoff_active": True,
                 "backoff_until": state["backoff_until"],
                 "error": str(exc),
-                "results": list(cached.get("results", [])) if cached else [],
+                "results": fallback_results,
+                "fallback_used": bool(not cached and fallback_results),
             }
             self.artifact_store.create(
                 "arxiv_ingestion_error",
@@ -181,8 +195,10 @@ class PaperDigestService:
         return sorted(digests.values(), key=lambda item: item.get("digested_at", ""), reverse=True)
 
     def scheduler_snapshot(self) -> dict[str, Any]:
+        backoff = self._load_json(self.backoff_path, {})
         return {
-            "backoff": self._load_json(self.backoff_path, {"consecutive_failures": 0, "backoff_until": 0, "last_error": None}),
+            "backoff": backoff,
+            "active_backoffs": sum(1 for item in backoff.values() if int(item.get("backoff_until", 0)) > _now_ts()) if isinstance(backoff, dict) else 0,
             "cached_queries": len(self._load_json(self.search_cache_path, {})),
             "digests": len(self._load_json(self.digests_path, {})),
         }
@@ -231,23 +247,87 @@ class PaperDigestService:
             )
         return results
 
-    def _register_backoff(self, error: str) -> dict[str, Any]:
-        state = self._load_json(self.backoff_path, {"consecutive_failures": 0, "backoff_until": 0, "last_error": None})
-        failures = int(state.get("consecutive_failures", 0)) + 1
+    def _backoff_state(self, query_key: str) -> dict[str, Any]:
+        state = self._load_json(self.backoff_path, {})
+        if not isinstance(state, dict):
+            return {"consecutive_failures": 0, "backoff_until": 0, "last_error": None}
+        return dict(state.get(query_key) or {"consecutive_failures": 0, "backoff_until": 0, "last_error": None})
+
+    def _register_backoff(self, query_key: str, error: str) -> dict[str, Any]:
+        state = self._load_json(self.backoff_path, {})
+        if not isinstance(state, dict):
+            state = {}
+        entry = dict(state.get(query_key) or {"consecutive_failures": 0, "backoff_until": 0, "last_error": None})
+        failures = int(entry.get("consecutive_failures", 0)) + 1
         delay = min(self.settings.arxiv_backoff_max_seconds, self.settings.arxiv_backoff_base_seconds * (2 ** max(0, failures - 1)))
         updated = {
             "consecutive_failures": failures,
             "backoff_until": _now_ts() + delay,
             "last_error": error,
         }
-        self._save_json(self.backoff_path, updated)
+        state[query_key] = updated
+        self._save_json(self.backoff_path, state)
         return updated
 
-    def _reset_backoff(self) -> None:
-        self._save_json(
-            self.backoff_path,
-            {"consecutive_failures": 0, "backoff_until": 0, "last_error": None},
+    def _reset_backoff(self, query_key: str) -> None:
+        state = self._load_json(self.backoff_path, {})
+        if not isinstance(state, dict):
+            state = {}
+        state[query_key] = {"consecutive_failures": 0, "backoff_until": 0, "last_error": None}
+        self._save_json(self.backoff_path, state)
+
+    def _fallback_curated_entries(self, query: str, max_results: int) -> list[dict[str, Any]]:
+        readme_urls = [
+            "https://raw.githubusercontent.com/VoltAgent/awesome-ai-agent-papers/main/README.md",
+            "https://raw.githubusercontent.com/VoltAgent/awesome-ai-agent-papers/master/README.md",
+        ]
+        text = ""
+        for url in readme_urls:
+            try:
+                response = httpx.get(url, timeout=30, follow_redirects=True)
+                response.raise_for_status()
+                text = response.text
+                break
+            except Exception:  # noqa: BLE001
+                continue
+        if not text:
+            return []
+        results: list[dict[str, Any]] = []
+        for match in re.finditer(r"\[([^\]]+)\]\((https://arxiv\.org/abs/[^)]+)\)", text):
+            title = re.sub(r"\s+", " ", match.group(1)).strip()
+            abs_url = match.group(2).strip()
+            line = self._readme_line(text, match.start())
+            score = self.scout_service._query_relevance(f"{title} {line}".lower(), query)  # noqa: SLF001
+            if score < 0.18:
+                continue
+            novelty_score, trust_score = self.scout_service._score_paper(query, title, line)  # noqa: SLF001
+            results.append(
+                {
+                    "id": f"paper_{_slug(abs_url)}",
+                    "source_type": "paper",
+                    "source_ref": abs_url,
+                    "title": title,
+                    "summary": line or title,
+                    "novelty_score": novelty_score,
+                    "trust_score": min(0.9, trust_score + 0.06),
+                    "license": "arXiv",
+                    "pdf_url": self._pdf_url_for_source(abs_url),
+                    "published": "",
+                }
+            )
+        results.sort(
+            key=lambda item: (
+                -self.scout_service._query_relevance(f"{item['title']} {item['summary']}".lower(), query),  # noqa: SLF001
+                item["source_ref"],
+            )
         )
+        return results[:max_results]
+
+    def _readme_line(self, text: str, index: int) -> str:
+        start = text.rfind("\n", 0, index)
+        end = text.find("\n", index)
+        snippet = text[start + 1 : end if end != -1 else None]
+        return re.sub(r"\s+", " ", snippet).strip()
 
     def _pdf_url_for_source(self, source_ref: str) -> str:
         if "/pdf/" in source_ref:

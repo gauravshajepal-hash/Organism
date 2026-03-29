@@ -199,16 +199,35 @@ class MutationLab:
             self._record_source_feedback(source_refs, event="mutation_apply_failed", mutation_failure_count=1, noisy_count=1)
             return
         preflight_results = self._run_preflight(candidate, plan, applied_edits)
+        failed_preflight = next((result for result in preflight_results if result.get("returncode") != 0), None)
+        repaired = False
+        if failed_preflight is not None:
+            repair_attempt = self._attempt_preflight_repair(
+                mission,
+                program,
+                candidate,
+                operator,
+                plan,
+                applied_edits,
+                source_refs,
+                failed_preflight,
+            )
+            if repair_attempt is not None:
+                plan = repair_attempt["plan"]
+                applied_edits = repair_attempt["applied_edits"]
+                preflight_results.extend(repair_attempt["preflight_results"])
+                failed_preflight = next((result for result in repair_attempt["preflight_results"] if result.get("returncode") != 0), None)
+                repaired = failed_preflight is None
         self.artifact_store.create(
             "mutation_preflight",
             {
                 "candidate_run_id": candidate["id"],
                 "results": preflight_results,
+                "repaired": repaired,
             },
             source_refs=[candidate["id"], *source_refs],
             created_by="mutation_lab",
         )
-        failed_preflight = next((result for result in preflight_results if result.get("returncode") != 0), None)
         if failed_preflight is not None:
             summary = f"{plan['summary']} Preflight failed with exit code {failed_preflight['returncode']}."
             self.storage.update_task_run(candidate["id"], status="failed", result_summary=summary[:500])
@@ -286,8 +305,15 @@ class MutationLab:
                 if search is None or replace is None:
                     errors.append(f"Malformed replacement block in {normalized_relative}")
                     continue
-                if search not in content:
+                if not search:
+                    errors.append(f"Empty SEARCH block in {normalized_relative}")
+                    continue
+                occurrences = content.count(search)
+                if occurrences == 0:
                     errors.append(f"SEARCH block not found in {normalized_relative}")
+                    continue
+                if occurrences > 1:
+                    errors.append(f"SEARCH block matched multiple locations in {normalized_relative}")
                     continue
                 content = content.replace(search, replace, 1)
             if content == before:
@@ -343,6 +369,72 @@ class MutationLab:
             if result.get("returncode") != 0:
                 break
         return results
+
+    def _attempt_preflight_repair(
+        self,
+        mission: dict | None,
+        program: dict | None,
+        candidate: dict,
+        operator: str,
+        plan: dict,
+        applied_edits: list[dict],
+        source_refs: list[str],
+        failed_preflight: dict,
+    ) -> dict | None:
+        target_path = candidate.get("target_path")
+        if not target_path:
+            return None
+        payload = dict(candidate.get("input_payload") or {})
+        existing_negative = list(payload.get("mutation_negative_memory") or [])
+        preflight_failure = "\n".join(
+            [
+                str(failed_preflight.get("command") or ""),
+                str(failed_preflight.get("stdout") or ""),
+                str(failed_preflight.get("stderr") or ""),
+            ]
+        ).strip()
+        repair_run = dict(candidate)
+        repair_run["instructions"] = (
+            f"{candidate['instructions']}\n"
+            "A preflight command failed after the first patch application. "
+            "Produce the smallest corrective diff that fixes the new error without broadening scope."
+        )
+        repair_run["input_payload"] = {
+            **payload,
+            "mutation_failure_output": preflight_failure[:6000],
+            "mutation_negative_memory": [
+                *existing_negative[:3],
+                f"{operator}: initial patch led to preflight failure -> {preflight_failure[:240]}",
+            ],
+        }
+        repair_plan = self.local_worker.plan_mutation(mission, program, repair_run, f"{operator}_repair", target_path)
+        repair_applied, repair_errors = self._apply_edits(
+            Path(target_path),
+            repair_plan["edits"],
+            allowed_paths=repair_plan.get("selected_files", []),
+        )
+        self.artifact_store.create(
+            "mutation_preflight_repair",
+            {
+                "candidate_run_id": candidate["id"],
+                "summary": repair_plan["summary"],
+                "selected_files": repair_plan.get("selected_files", []),
+                "selection_rationale": repair_plan.get("selection_rationale", ""),
+                "apply_errors": repair_errors,
+                "applied_edits": repair_applied,
+                "raw_response": repair_plan.get("raw_response", ""),
+            },
+            source_refs=[candidate["id"], *source_refs],
+            created_by="mutation_lab",
+        )
+        if not repair_applied:
+            return None
+        repair_preflight = self._run_preflight(candidate, repair_plan, applied_edits + repair_applied)
+        return {
+            "plan": repair_plan,
+            "applied_edits": applied_edits + repair_applied,
+            "preflight_results": repair_preflight,
+        }
 
     def _preflight_commands(self, candidate: dict, plan: dict, applied_edits: list[dict]) -> list[str]:
         commands: list[str] = []

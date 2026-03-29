@@ -719,6 +719,82 @@ def answer() -> int
     assert preflight[0]["payload"]["results"][0]["returncode"] != 0
 
 
+def test_mutation_preflight_repair_recovers_single_bad_patch(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    _, program_id = create_seed_objects(client)
+
+    workspace = tmp_path / "repair_workspace"
+    (workspace / "app").mkdir(parents=True)
+    (workspace / "tests").mkdir(parents=True)
+    (workspace / "app" / "logic.py").write_text("def answer() -> int:\n    return 0\n", encoding="utf-8")
+    (workspace / "tests" / "test_logic.py").write_text(
+        "from app.logic import answer\n\n\ndef test_answer() -> None:\n    assert answer() == 42\n",
+        encoding="utf-8",
+    )
+    (workspace / "app" / "__init__.py").write_text("", encoding="utf-8")
+
+    source_ref = "https://github.com/example/self-repair"
+    base_run = client.post(
+        f"/programs/{program_id}/runs",
+        json={
+            "task_type": "code",
+            "instructions": "Base mutation run for preflight repair.",
+            "command": "python -m pytest tests/test_logic.py -q",
+            "target_path": str(workspace),
+            "input_payload": {"meta_improvement_source_refs": [source_ref]},
+        },
+    ).json()
+    client.post(f"/runs/{base_run['id']}/start")
+
+    first_response = """
+<<<SUMMARY>>>
+Apply a first patch that accidentally introduces a syntax error.
+<<<END SUMMARY>>>
+<<<FILE:app/logic.py>>>
+<<<<<<< SEARCH
+def answer() -> int:
+    return 0
+=======
+def answer() -> int
+    return 42
+>>>>>>> REPLACE
+<<<END FILE>>>
+""".strip()
+    second_response = """
+<<<SUMMARY>>>
+Repair the syntax error while keeping the same narrow fix.
+<<<END SUMMARY>>>
+<<<FILE:app/logic.py>>>
+<<<<<<< SEARCH
+def answer() -> int
+    return 42
+=======
+def answer() -> int:
+    return 42
+>>>>>>> REPLACE
+<<<END FILE>>>
+""".strip()
+
+    with patch.object(LocalWorker, "_invoke_model", autospec=True, side_effect=[first_response, second_response]):
+        mutation = client.post(
+            "/mutation/jobs",
+            json={"run_id": base_run["id"], "strategy": "repair", "iterations": 1, "auto_stage": True},
+        )
+    assert mutation.status_code == 200
+    candidate_id = mutation.json()["candidate_run_ids"][0]
+    candidate = client.get(f"/runs/{candidate_id}").json()
+    assert candidate["status"] == "ready_for_promotion"
+
+    artifacts = client.get("/artifacts?limit=200").json()
+    repair_artifacts = [item for item in artifacts if item["type"] == "mutation_preflight_repair" and candidate_id in item["source_refs"]]
+    assert repair_artifacts
+    preflight = [item for item in artifacts if item["type"] == "mutation_preflight" and candidate_id in item["source_refs"]]
+    assert preflight
+    assert preflight[0]["payload"]["repaired"] is True
+    assert any(result["returncode"] != 0 for result in preflight[0]["payload"]["results"])
+    assert any(result["returncode"] == 0 for result in preflight[0]["payload"]["results"])
+
+
 def test_mutation_success_and_promotion_update_source_feedback(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     _, program_id = create_seed_objects(client)

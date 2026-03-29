@@ -60,6 +60,7 @@ class Settings:
     arxiv_max_results_per_query: int
     arxiv_digest_top_n: int
     arxiv_default_queries: list[str]
+    arxiv_queries_per_cycle: int
     supervisor_enabled: bool
     supervisor_poll_interval_seconds: int
     supervisor_objective_limit: int
@@ -149,6 +150,7 @@ def load_settings() -> Settings:
             ).split(",")
             if item.strip()
         ],
+        arxiv_queries_per_cycle=int(os.getenv("CHIMERA_ARXIV_QUERIES_PER_CYCLE", "3")),
         supervisor_enabled=_env_flag("CHIMERA_ENABLE_SUPERVISOR", background_default),
         supervisor_poll_interval_seconds=int(os.getenv("CHIMERA_SUPERVISOR_POLL_INTERVAL_SECONDS", "900")),
         supervisor_objective_limit=int(os.getenv("CHIMERA_SUPERVISOR_OBJECTIVE_LIMIT", "3")),
