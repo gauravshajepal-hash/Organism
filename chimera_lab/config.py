@@ -37,6 +37,10 @@ class Settings:
     mutation_max_files: int
     mutation_max_changed_lines: int
     mutation_review_min_confidence: float
+    tree_search_branch_factor: int
+    tree_search_depth: int
+    tree_search_parallel_tracks: int
+    tree_search_score_decay: float
 
 
 def load_settings() -> Settings:
@@ -82,4 +86,8 @@ def load_settings() -> Settings:
         mutation_max_files=int(os.getenv("CHIMERA_MUTATION_MAX_FILES", "3")),
         mutation_max_changed_lines=int(os.getenv("CHIMERA_MUTATION_MAX_CHANGED_LINES", "240")),
         mutation_review_min_confidence=float(os.getenv("CHIMERA_MUTATION_REVIEW_MIN_CONFIDENCE", "0.6")),
+        tree_search_branch_factor=int(os.getenv("CHIMERA_TREE_SEARCH_BRANCH_FACTOR", "3")),
+        tree_search_depth=int(os.getenv("CHIMERA_TREE_SEARCH_DEPTH", "3")),
+        tree_search_parallel_tracks=int(os.getenv("CHIMERA_TREE_SEARCH_PARALLEL_TRACKS", "3")),
+        tree_search_score_decay=float(os.getenv("CHIMERA_TREE_SEARCH_SCORE_DECAY", "0.88")),
     )

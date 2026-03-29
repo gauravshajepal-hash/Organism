@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from chimera_lab.db import Storage
+from chimera_lab.config import Settings
 from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.memory_tiers import MemoryTierOrchestrator
 from chimera_lab.services.research_evolution import ResearchEvolutionLab
@@ -14,6 +15,7 @@ from chimera_lab.services.scout_service import ScoutService
 class RunAutomation:
     def __init__(
         self,
+        settings: Settings,
         storage: Storage,
         artifact_store: ArtifactStore,
         scout_feed_registry: ScoutFeedRegistry,
@@ -21,6 +23,7 @@ class RunAutomation:
         memory_tiers: MemoryTierOrchestrator,
         research_evolution_lab: ResearchEvolutionLab,
     ) -> None:
+        self.settings = settings
         self.storage = storage
         self.artifact_store = artifact_store
         self.scout_feed_registry = scout_feed_registry
@@ -61,18 +64,35 @@ class RunAutomation:
             payload["feed_sync_refs"] = synced_refs
             payload["live_sources"] = [item["source_ref"] for item in live_sources]
             payload["memory_context"] = self.memory_tiers.retrieve(query, tier="working", limit=5)
+            payload["source_trace_required"] = True
+            payload["source_trace_bundle"] = {
+                "query": query,
+                "feed_sync_refs": synced_refs[:10],
+                "live_sources": payload["live_sources"][:10],
+            }
             auto_organs.extend(["scout_feeds", "live_scout", "memory_tiers"])
 
         elif run["task_type"] == "plan":
-            branch_factor = int(payload.get("tree_branch_factor", 3))
-            depth = int(payload.get("tree_depth", 2))
-            tree_search = self.research_evolution_lab.stage_tree_search(run["program_id"], query, branch_factor, depth)
+            branch_factor = int(payload.get("tree_branch_factor", self.settings.tree_search_branch_factor))
+            depth = int(payload.get("tree_depth", self.settings.tree_search_depth))
+            parallel_tracks = int(payload.get("tree_parallel_tracks", self.settings.tree_search_parallel_tracks))
+            score_decay = float(payload.get("tree_score_decay", self.settings.tree_search_score_decay))
+            tree_search = self.research_evolution_lab.stage_tree_search(
+                run["program_id"],
+                query,
+                branch_factor=branch_factor,
+                depth=depth,
+                parallel_tracks=parallel_tracks,
+                score_decay=score_decay,
+            )
             autoresearch = self.research_evolution_lab.run_autoresearch(query, metric="plan_quality", iteration_budget=3)
             payload["tree_search_id"] = tree_search["id"]
             payload["tree_search_summary"] = {
                 "node_count": len(tree_search["nodes"]),
                 "experiment_count": len(tree_search["experiments"]),
                 "best_node_score": max((node["score"] for node in tree_search["nodes"]), default=0.0),
+                "parallel_tracks": tree_search["parallel_tracks"],
+                "score_decay": tree_search["score_decay"],
             }
             payload["autoresearch_id"] = autoresearch["id"]
             payload["autoresearch_summary"] = {
@@ -80,6 +100,7 @@ class RunAutomation:
                 "iterations": len(autoresearch["iterations"]),
             }
             payload["memory_context"] = self.memory_tiers.retrieve(query, limit=5)
+            payload["source_trace_required"] = True
             auto_organs.extend(["tree_search", "autoresearch", "memory_tiers"])
 
         elif run["task_type"] in {"review", "risk", "spec_check"}:
@@ -103,6 +124,7 @@ class RunAutomation:
                 "model_tier": verdict.model_tier,
             }
             payload["memory_context"] = self.memory_tiers.retrieve(query, limit=5)
+            payload["source_trace_required"] = True
             auto_organs.extend(["referee_loop", "memory_tiers"])
 
         elif run["task_type"] == "status":
@@ -120,10 +142,24 @@ class RunAutomation:
                 "run_id": run["id"],
                 "task_type": run["task_type"],
                 "auto_organs": payload["auto_organs"],
+                "source_trace_required": bool(payload.get("source_trace_required")),
             },
             source_refs=[run["id"]],
             created_by="run_automation",
         )
+        if payload.get("source_trace_required"):
+            refs = list(dict.fromkeys((payload.get("live_sources") or []) + (payload.get("feed_sync_refs") or [])))
+            self.artifact_store.create(
+                "source_trace_bundle",
+                {
+                    "run_id": run["id"],
+                    "task_type": run["task_type"],
+                    "query": query,
+                    "source_refs": refs[:20],
+                },
+                source_refs=[run["id"], *refs[:20]],
+                created_by="run_automation",
+            )
         return updated
 
     def post_run(self, run: dict) -> dict | None:

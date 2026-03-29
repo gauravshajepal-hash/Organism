@@ -147,6 +147,39 @@ def test_memory_and_scout_flow(tmp_path: Path) -> None:
     assert candidates[0]["source_ref"] == "https://github.com/bytedance/deer-flow"
 
 
+def test_research_ingest_run_records_source_trace_bundle(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    _, program_id = create_seed_objects(client)
+    client.app.state.services.scout_service.search_live_sources = lambda query, per_source=3: [  # noqa: ARG005
+        {
+            "id": "scout_live_source",
+            "source_type": "github",
+            "source_ref": "https://github.com/bytedance/deer-flow",
+            "summary": "DeerFlow harness",
+            "novelty_score": 0.81,
+            "trust_score": 0.9,
+            "license": "MIT",
+            "created_at": "2026-03-29T00:00:00+00:00",
+        }
+    ]
+
+    run = client.post(
+        f"/programs/{program_id}/runs",
+        json={"task_type": "research_ingest", "instructions": "Find the best harness patterns."},
+    ).json()
+    started = client.post(f"/runs/{run['id']}/start")
+    assert started.status_code == 200
+
+    refreshed = client.get(f"/runs/{run['id']}").json()
+    assert refreshed["input_payload"]["source_trace_required"] is True
+    assert refreshed["input_payload"]["source_trace_bundle"]["live_sources"] == ["https://github.com/bytedance/deer-flow"]
+
+    artifacts = client.get("/artifacts?limit=50").json()
+    bundles = [item for item in artifacts if item["type"] == "source_trace_bundle" and run["id"] in item["source_refs"]]
+    assert bundles
+    assert "https://github.com/bytedance/deer-flow" in bundles[0]["payload"]["source_refs"]
+
+
 def test_live_scout_search_tolerates_partial_source_failure(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 

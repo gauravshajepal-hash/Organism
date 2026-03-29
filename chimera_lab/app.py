@@ -162,6 +162,7 @@ def create_app() -> FastAPI:
         frontier_adapter=frontier_adapter,
         local_worker=local_worker,
         run_automation=RunAutomation(
+            settings,
             storage,
             artifact_store,
             scout_feed_registry=scout_feed_registry,

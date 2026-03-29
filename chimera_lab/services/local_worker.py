@@ -92,6 +92,7 @@ class LocalWorker:
         skills = self.skill_registry.relevant_for(run["task_type"]) if self.skill_registry else []
         payload = run.get("input_payload") or {}
         organ_context = self._organ_context(payload)
+        source_trace_requirement = self._source_trace_requirement(payload)
         return "\n".join(
             [
                 f"Mission goal: {mission_goal}",
@@ -103,6 +104,7 @@ class LocalWorker:
                 f"Relevant skills: {', '.join(skill['name'] for skill in skills) or 'None'}",
                 f"Repo context:\n{repo_context}",
                 f"Organ context:\n{organ_context}",
+                source_trace_requirement,
                 "Return a concise execution plan, notable risks, and the next action.",
             ]
         )
@@ -517,3 +519,11 @@ class LocalWorker:
         if payload.get("memory_context"):
             sections.append(f"Memory context: {json.dumps(payload['memory_context'][:3], ensure_ascii=True)}")
         return "\n".join(sections) if sections else "No additional organ context."
+
+    def _source_trace_requirement(self, payload: dict[str, Any]) -> str:
+        if not payload.get("source_trace_required"):
+            return "Source trace: optional."
+        refs = list(dict.fromkeys((payload.get("live_sources") or []) + (payload.get("feed_sync_refs") or [])))
+        if not refs:
+            return "Source trace mandate: cite the source bundle or state explicitly that no live sources were available."
+        return "Source trace mandate: ground any research claims in these refs -> " + ", ".join(refs[:8])

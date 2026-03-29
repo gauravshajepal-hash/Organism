@@ -87,12 +87,16 @@ class GitSafetyService:
                     "stdout": pushed.stdout.strip(),
                     "stderr": pushed.stderr.strip(),
                 }
+                if pushed.returncode != 0 and self._needs_remote_reconcile(push_result):
+                    push_result = self._reconcile_and_push()
             else:
                 push_result = {"returncode": 1, "stdout": "", "stderr": "missing_remote_origin"}
 
         status = "ok"
         if push_result is not None and push_result.get("returncode") not in {0, None}:
             status = "push_failed"
+        elif push_result is not None and push_result.get("recovery"):
+            status = "push_reconciled"
 
         result = {
             "status": status,
@@ -137,3 +141,38 @@ class GitSafetyService:
             self._git(["config", "user.name", "Chimera Lab"], check=True)
         if not self._git_output(["config", "user.email"]):
             self._git(["config", "user.email", "chimera@local.invalid"], check=True)
+
+    def _needs_remote_reconcile(self, push_result: dict[str, Any]) -> bool:
+        stderr = str(push_result.get("stderr") or "").lower()
+        stdout = str(push_result.get("stdout") or "").lower()
+        text = f"{stdout}\n{stderr}"
+        return any(token in text for token in ["fetch first", "non-fast-forward", "rejected"])
+
+    def _reconcile_and_push(self) -> dict[str, Any]:
+        branch = self.settings.git_branch
+        fetch = self._git(["fetch", "origin", branch], check=False)
+        if fetch.returncode != 0:
+            return {
+                "returncode": fetch.returncode,
+                "stdout": fetch.stdout.strip(),
+                "stderr": fetch.stderr.strip(),
+                "recovery": "fetch_failed",
+            }
+
+        rebase = self._git(["rebase", f"origin/{branch}"], check=False)
+        if rebase.returncode != 0:
+            self._git(["rebase", "--abort"], check=False)
+            return {
+                "returncode": rebase.returncode,
+                "stdout": rebase.stdout.strip(),
+                "stderr": rebase.stderr.strip(),
+                "recovery": "rebase_failed",
+            }
+
+        pushed = self._git(["push", "-u", "origin", branch], check=False)
+        return {
+            "returncode": pushed.returncode,
+            "stdout": pushed.stdout.strip(),
+            "stderr": pushed.stderr.strip(),
+            "recovery": "fetch_rebase_retry",
+        }

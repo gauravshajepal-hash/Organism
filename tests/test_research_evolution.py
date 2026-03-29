@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+from chimera_lab.config import load_settings
+from chimera_lab.db import Storage
+from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.model_merge_registry import ModelMergeRegistry
+from chimera_lab.services.research_evolution import ResearchEvolutionLab
 from chimera_lab.services.research_evolution_service import (
     BestFirstTreeSearch,
     ExperimentManager,
@@ -135,3 +142,19 @@ def test_model_merge_registry_tracks_models_recipes_and_merges() -> None:
     assert merge.metrics["score"] == 0.91
     assert registry.get_merge(merge.id).result_name == "model-merged"
     assert [item.name for item in registry.list_models()] == ["model-a", "model-b"]
+
+
+def test_stage_tree_search_uses_parallel_tracks_and_higher_node_budget(tmp_path: Path) -> None:
+    os.environ["CHIMERA_DATA_DIR"] = str(tmp_path / "data")
+    settings = load_settings()
+    storage = Storage(settings.db_path)
+    artifact_store = ArtifactStore(storage)
+    lab = ResearchEvolutionLab(settings, artifact_store)
+
+    search = lab.stage_tree_search("program_alpha", "Upgrade the organism safely")
+
+    assert search["parallel_tracks"] == settings.tree_search_parallel_tracks
+    assert search["score_decay"] == settings.tree_search_score_decay
+    assert len(search["nodes"]) >= 25
+    assert len(search["experiments"]) == (len(search["nodes"]) - 1) * settings.tree_search_parallel_tracks
+    assert search["referee_verdicts"]

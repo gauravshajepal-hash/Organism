@@ -98,3 +98,47 @@ def test_runtime_guard_recovers_unclean_shutdown(tmp_path: Path) -> None:
     assert latest_crash is not None
     assert latest_crash["kind"] == "unclean_shutdown"
     assert latest_crash["last_events"][0]["event_type"] == "run_started"
+
+
+def test_git_checkpoint_reconciles_non_fast_forward_push(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "README.md").write_text("seed\n", encoding="utf-8")
+
+    client.post("/ops/git/init", json={})
+    first = client.post("/ops/git/checkpoint", json={"reason": "initial-backup", "push": True})
+    assert first.status_code == 200
+    assert first.json()["status"] == "ok"
+
+    remote = tmp_path / "remote.git"
+    clone = tmp_path / "remote_clone"
+    subprocess.run(["git", "clone", str(remote), str(clone)], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(clone), "config", "user.name", "Remote User"], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(clone), "config", "user.email", "remote@example.com"], check=True, capture_output=True, text=True)
+    (clone / "README.md").write_text("seed\nremote\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(clone), "add", "README.md"], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(clone), "commit", "-m", "remote update"], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(clone), "push", "origin", "main"], check=True, capture_output=True, text=True)
+
+    (repo_root / "OPERATIONS.md").write_text("local\n", encoding="utf-8")
+    checkpoint = client.post("/ops/git/checkpoint", json={"reason": "local-update", "push": True})
+    assert checkpoint.status_code == 200
+    payload = checkpoint.json()
+    assert payload["status"] == "push_reconciled"
+    assert payload["push_result"]["returncode"] == 0
+    assert payload["push_result"]["recovery"] == "fetch_rebase_retry"
+
+    remote_head = subprocess.run(
+        ["git", "--git-dir", str(remote), "rev-parse", "refs/heads/main"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    local_head = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert remote_head == local_head

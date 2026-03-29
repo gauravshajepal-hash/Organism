@@ -59,6 +59,10 @@ class FrontierAdapter:
             organ_lines.append(f"Memory context: {payload['memory_context'][:3]}")
         if payload.get("live_sources"):
             organ_lines.append(f"Live sources: {payload['live_sources'][:6]}")
+        if payload.get("source_trace_required"):
+            organ_lines.append("Source trace mandate: yes")
+        if payload.get("source_trace_bundle"):
+            organ_lines.append(f"Source trace bundle: {payload['source_trace_bundle']}")
         return "\n".join(
             [
                 f"Reviewer type: {reviewer_type}",
@@ -70,6 +74,7 @@ class FrontierAdapter:
                 f"Command: {run['command'] or 'N/A'}",
                 f"Organ context: {' | '.join(organ_lines) if organ_lines else 'None'}",
                 "Deliver a concise structured response with risks, tests, and decision.",
+                "If the organ context requires source tracing, explicitly anchor research claims to the provided refs or say that evidence is missing.",
             ]
         )
 
