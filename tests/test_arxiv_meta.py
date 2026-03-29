@@ -37,7 +37,7 @@ def test_paper_ingestion_caches_and_digests(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     with (
         patch.object(
-            client.app.state.services.paper_digest_service,
+            type(client.app.state.services.paper_digest_service),
             "_fetch_arxiv_entries",
             return_value=[
                 {
@@ -54,9 +54,9 @@ def test_paper_ingestion_caches_and_digests(tmp_path: Path) -> None:
                 }
             ],
         ),
-        patch.object(client.app.state.services.paper_digest_service, "_download_pdf_bytes", return_value=b"%PDF-1.4 fake"),
+        patch.object(type(client.app.state.services.paper_digest_service), "_download_pdf_bytes", return_value=b"%PDF-1.4 fake"),
         patch.object(
-            client.app.state.services.paper_digest_service,
+            type(client.app.state.services.paper_digest_service),
             "_extract_pdf_text",
             return_value="Abstract This paper studies agent memory and evaluation. 1 Introduction The method improves retrieval reliability.",
         ),
@@ -95,7 +95,7 @@ def test_arxiv_scheduler_uses_recent_queries(tmp_path: Path) -> None:
     )
 
     seen_queries: list[str] = []
-    def fake_ingest(query, max_results=None, force=False, digest_top_n=None):  # noqa: ARG001
+    def fake_ingest(self, query, max_results=None, force=False, digest_top_n=None):  # noqa: ARG001
         seen_queries.append(query)
         return {
             "query": query,
@@ -105,7 +105,7 @@ def test_arxiv_scheduler_uses_recent_queries(tmp_path: Path) -> None:
             "backoff_active": False,
         }
 
-    with patch.object(client.app.state.services.paper_digest_service, "ingest_query", side_effect=fake_ingest):
+    with patch.object(type(client.app.state.services.paper_digest_service), "ingest_query", side_effect=fake_ingest):
         response = client.post("/ops/arxiv/run-once")
         assert response.status_code == 200
         payload = response.json()
