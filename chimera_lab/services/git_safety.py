@@ -32,6 +32,7 @@ class GitSafetyService:
             "repo_root": str(self.repo_root),
             "repo_exists": repo_exists,
             "remote_url": None,
+            "remotes": {},
             "branch": self.settings.git_branch,
             "upstream": None,
             "head": None,
@@ -46,6 +47,7 @@ class GitSafetyService:
         if not repo_exists:
             return payload
         payload["remote_url"] = self._git_output(["remote", "get-url", "origin"])
+        payload["remotes"] = self._current_remotes()
         payload["branch"] = self._git_output(["rev-parse", "--abbrev-ref", "HEAD"]) or self.settings.git_branch
         payload["head"] = self._git_output(["rev-parse", "--short", "HEAD"])
         payload["dirty"] = bool(self._git_output(["status", "--porcelain"]))
@@ -62,12 +64,9 @@ class GitSafetyService:
             self._git(["init"], check=True)
         self._git(["branch", "-M", branch], check=False)
         self._ensure_identity()
-        existing_remote = self._git_output(["remote", "get-url", "origin"])
-        if existing_remote:
-            if existing_remote != remote_url:
-                self._git(["remote", "set-url", "origin", remote_url], check=True)
-        else:
-            self._git(["remote", "add", "origin", remote_url], check=True)
+        self._ensure_remote("origin", remote_url)
+        if self.settings.git_mirror_remote_url:
+            self._ensure_remote(self.settings.git_mirror_remote_name, self.settings.git_mirror_remote_url)
         result = {"status": "ready", **self.status()}
         self._record("git_repository_ready", result)
         return result
@@ -95,17 +94,12 @@ class GitSafetyService:
             commit_hash = self._git_output(["rev-parse", "--short", "HEAD"])
 
         push_result = None
+        tag_result = None
         if push:
-            remote = self._git_output(["remote", "get-url", "origin"])
-            if remote:
-                pushed = self._git(["push", "-u", "origin", self.settings.git_branch], check=False)
-                push_result = {
-                    "returncode": pushed.returncode,
-                    "stdout": pushed.stdout.strip(),
-                    "stderr": pushed.stderr.strip(),
-                }
-                if pushed.returncode != 0 and self._needs_remote_reconcile(push_result):
-                    push_result = self._reconcile_and_push()
+            if self._git_output(["remote", "get-url", "origin"]):
+                push_result = self._push_branch_to_remotes(self.settings.git_branch)
+                if push_result.get("returncode") == 0 and self.settings.git_backup_tags_enabled:
+                    tag_result = self._create_and_push_backup_tag(reason, commit_hash)
             else:
                 push_result = {"returncode": 1, "stdout": "", "stderr": "missing_remote_origin"}
 
@@ -114,6 +108,8 @@ class GitSafetyService:
             status = "push_failed"
         elif push_result is not None and push_result.get("recovery"):
             status = "push_reconciled"
+        if tag_result is not None and tag_result.get("returncode") not in {0, None}:
+            status = "push_failed"
 
         result = {
             "status": status,
@@ -121,6 +117,7 @@ class GitSafetyService:
             "commit": commit_hash,
             "pushed": bool(push),
             "push_result": push_result,
+            "tag_result": tag_result,
             **self.status(),
         }
         if status in {"ok", "push_reconciled"}:
@@ -179,14 +176,25 @@ class GitSafetyService:
         if revert.returncode == 0:
             result["revert_commit"] = self._git_output(["rev-parse", "--short", "HEAD"])
             if push:
-                remote = self._git_output(["remote", "get-url", "origin"])
-                if remote:
-                    pushed = self._git(["push", "-u", "origin", self.settings.git_branch], check=False)
-                    result["push_result"] = {
-                        "returncode": pushed.returncode,
-                        "stdout": pushed.stdout.strip(),
-                        "stderr": pushed.stderr.strip(),
-                    }
+                if self._git_output(["remote", "get-url", "origin"]):
+                    result["push_result"] = self._push_branch_to_remotes(self.settings.git_branch)
+                    if result["push_result"].get("returncode") == 0 and self.settings.git_backup_tags_enabled:
+                        result["tag_result"] = self._create_and_push_backup_tag(reason, result["revert_commit"])
+                else:
+                    result["push_result"] = {"returncode": 1, "stdout": "", "stderr": "missing_remote_origin"}
+                if result["push_result"].get("returncode") not in {0, None}:
+                    result["status"] = "revert_failed"
+                elif result.get("tag_result") is not None and result["tag_result"].get("returncode") not in {0, None}:
+                    result["status"] = "revert_failed"
+                else:
+                    self._write_backup_state(result)
+            else:
+                if self.settings.git_backup_tags_enabled:
+                    result["tag_result"] = self._create_local_backup_tag(reason, result["revert_commit"])
+                    if result["tag_result"].get("returncode") in {0, None}:
+                        self._write_backup_state(result)
+                else:
+                    self._write_backup_state(result)
         else:
             self._git(["revert", "--abort"], check=False)
         self._record("git_revert", result)
@@ -230,6 +238,25 @@ class GitSafetyService:
         stdout = str(push_result.get("stdout") or "").lower()
         text = f"{stdout}\n{stderr}"
         return any(token in text for token in ["fetch first", "non-fast-forward", "rejected"])
+
+    def _ensure_remote(self, name: str, remote_url: str) -> None:
+        existing_remote = self._git_output(["remote", "get-url", name])
+        if existing_remote:
+            if existing_remote != remote_url:
+                self._git(["remote", "set-url", name, remote_url], check=True)
+        else:
+            self._git(["remote", "add", name, remote_url], check=True)
+
+    def _current_remotes(self) -> dict[str, str]:
+        result = self._git(["remote", "-v"], check=False)
+        if result.returncode != 0:
+            return {}
+        remotes: dict[str, str] = {}
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] not in remotes:
+                remotes[parts[0]] = parts[1]
+        return remotes
 
     def _branch_divergence(self, branch: str | None, upstream: str | None) -> dict[str, Any]:
         remote_url = self._git_output(["remote", "get-url", "origin"])
@@ -298,20 +325,18 @@ class GitSafetyService:
             self._record("git_checkpoint", result)
             return result
 
-        pushed = self._git(["push", "-u", "origin", branch], check=False)
-        push_result = {
-            "returncode": pushed.returncode,
-            "stdout": pushed.stdout.strip(),
-            "stderr": pushed.stderr.strip(),
-        }
-        if pushed.returncode != 0 and self._needs_remote_reconcile(push_result):
-            push_result = self._reconcile_and_push()
+        push_result = self._push_branch_to_remotes(branch)
+        tag_result = None
+        if push_result.get("returncode") == 0 and self.settings.git_backup_tags_enabled:
+            tag_result = self._create_and_push_backup_tag(reason, status.get("head"))
 
         refreshed = self.status()
         if push_result.get("returncode") not in {0, None}:
             status_value = "push_failed"
         elif push_result.get("recovery"):
             status_value = "push_reconciled"
+        elif tag_result is not None and tag_result.get("returncode") not in {0, None}:
+            status_value = "push_failed"
         else:
             status_value = "push_verified" if verify_only else "push_only_ok"
 
@@ -321,6 +346,7 @@ class GitSafetyService:
             "commit": refreshed.get("head"),
             "pushed": True,
             "push_result": push_result,
+            "tag_result": tag_result,
             **refreshed,
         }
         if status_value in {"push_only_ok", "push_reconciled", "push_verified"}:
@@ -328,9 +354,48 @@ class GitSafetyService:
         self._record("git_checkpoint", result)
         return result
 
-    def _reconcile_and_push(self) -> dict[str, Any]:
-        branch = self.settings.git_branch
-        fetch = self._git(["fetch", "origin", branch], check=False)
+    def _push_branch_to_remotes(self, branch: str) -> dict[str, Any]:
+        per_remote: dict[str, dict[str, Any]] = {}
+        recovery = None
+        returncode = 0
+        for remote_name in self._push_remote_names():
+            pushed = self._push_branch_to_remote(remote_name, branch)
+            per_remote[remote_name] = pushed
+            if pushed.get("returncode") not in {0, None}:
+                returncode = pushed["returncode"]
+            if pushed.get("recovery"):
+                recovery = pushed["recovery"]
+        return {
+            "returncode": returncode,
+            "stdout": "\n".join(filter(None, [item.get("stdout", "") for item in per_remote.values()])),
+            "stderr": "\n".join(filter(None, [item.get("stderr", "") for item in per_remote.values()])),
+            "recovery": recovery,
+            "per_remote": per_remote,
+        }
+
+    def _push_remote_names(self) -> list[str]:
+        names = ["origin"]
+        mirror = self.settings.git_mirror_remote_name.strip()
+        if self.settings.git_mirror_remote_url and mirror and mirror not in names:
+            names.append(mirror)
+        return names
+
+    def _push_branch_to_remote(self, remote_name: str, branch: str) -> dict[str, Any]:
+        remote_url = self._git_output(["remote", "get-url", remote_name])
+        if not remote_url:
+            return {"returncode": 1, "stdout": "", "stderr": f"missing_remote_{remote_name}"}
+        pushed = self._git(["push", "-u", remote_name, branch], check=False)
+        push_result = {
+            "returncode": pushed.returncode,
+            "stdout": pushed.stdout.strip(),
+            "stderr": pushed.stderr.strip(),
+        }
+        if pushed.returncode != 0 and self._needs_remote_reconcile(push_result):
+            return self._reconcile_and_push(remote_name, branch)
+        return push_result
+
+    def _reconcile_and_push(self, remote_name: str, branch: str) -> dict[str, Any]:
+        fetch = self._git(["fetch", remote_name, branch], check=False)
         if fetch.returncode != 0:
             return {
                 "returncode": fetch.returncode,
@@ -339,7 +404,7 @@ class GitSafetyService:
                 "recovery": "fetch_failed",
             }
 
-        rebase = self._git(["rebase", f"origin/{branch}"], check=False)
+        rebase = self._git(["rebase", f"{remote_name}/{branch}"], check=False)
         if rebase.returncode != 0:
             self._git(["rebase", "--abort"], check=False)
             return {
@@ -349,12 +414,60 @@ class GitSafetyService:
                 "recovery": "rebase_failed",
             }
 
-        pushed = self._git(["push", "-u", "origin", branch], check=False)
+        pushed = self._git(["push", "-u", remote_name, branch], check=False)
         return {
             "returncode": pushed.returncode,
             "stdout": pushed.stdout.strip(),
             "stderr": pushed.stderr.strip(),
             "recovery": "fetch_rebase_retry",
+        }
+
+    def _create_and_push_backup_tag(self, reason: str, commit_hash: str | None) -> dict[str, Any]:
+        tag_result = self._create_local_backup_tag(reason, commit_hash)
+        if tag_result.get("returncode") not in {0, None}:
+            return tag_result
+        tag_name = tag_result.get("tag")
+        if not tag_name:
+            return tag_result
+        per_remote: dict[str, dict[str, Any]] = {}
+        returncode = 0
+        for remote_name in self._push_remote_names():
+            if not self._git_output(["remote", "get-url", remote_name]):
+                per_remote[remote_name] = {"returncode": 1, "stdout": "", "stderr": f"missing_remote_{remote_name}"}
+                returncode = 1
+                continue
+            pushed = self._git(["push", remote_name, tag_name], check=False)
+            remote_result = {
+                "returncode": pushed.returncode,
+                "stdout": pushed.stdout.strip(),
+                "stderr": pushed.stderr.strip(),
+            }
+            per_remote[remote_name] = remote_result
+            if pushed.returncode != 0:
+                returncode = pushed.returncode
+        return {
+            "returncode": returncode,
+            "tag": tag_name,
+            "per_remote": per_remote,
+        }
+
+    def _create_local_backup_tag(self, reason: str, commit_hash: str | None) -> dict[str, Any]:
+        commit = commit_hash or self._git_output(["rev-parse", "--short", "HEAD"])
+        if not commit:
+            return {"returncode": 1, "stderr": "missing_head_commit", "stdout": "", "tag": None}
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        prefix = _slug(self.settings.git_backup_tag_prefix).replace("-", "_")
+        reason_slug = _slug(reason)
+        tag_name = f"{prefix}/{timestamp}-{reason_slug}-{commit}"
+        tagged = self._git(
+            ["tag", "-a", tag_name, "-m", f"Chimera backup {timestamp} {reason_slug}", commit],
+            check=False,
+        )
+        return {
+            "returncode": tagged.returncode,
+            "stdout": tagged.stdout.strip(),
+            "stderr": tagged.stderr.strip(),
+            "tag": tag_name,
         }
 
     def _secret_gate(self, reason: str) -> dict[str, Any] | None:
@@ -433,6 +546,8 @@ class GitSafetyService:
             "commit": payload.get("commit"),
             "branch": payload.get("branch"),
             "remote_url": payload.get("remote_url"),
+            "remotes": payload.get("remotes"),
+            "tag_result": payload.get("tag_result"),
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
