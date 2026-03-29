@@ -10,9 +10,12 @@ from fastapi.testclient import TestClient
 from chimera_lab.app import create_app
 
 
-def make_client(tmp_path: Path) -> TestClient:
+def make_client(tmp_path: Path, *, mirror: bool = False) -> TestClient:
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
+    mirror_remote = tmp_path / "mirror.git"
+    if mirror:
+        subprocess.run(["git", "init", "--bare", str(mirror_remote)], check=True, capture_output=True, text=True)
 
     os.environ["CHIMERA_DATA_DIR"] = str(tmp_path / "data")
     os.environ["CHIMERA_ENABLE_OLLAMA"] = "0"
@@ -22,6 +25,13 @@ def make_client(tmp_path: Path) -> TestClient:
     os.environ["CHIMERA_GIT_REMOTE_URL"] = str(remote)
     os.environ["CHIMERA_GIT_BRANCH"] = "main"
     os.environ["CHIMERA_GIT_AUTOPUSH"] = "1"
+    os.environ["CHIMERA_GIT_BACKUP_TAGS_ENABLED"] = "1"
+    if mirror:
+        os.environ["CHIMERA_GIT_MIRROR_REMOTE_URL"] = str(mirror_remote)
+        os.environ["CHIMERA_GIT_MIRROR_REMOTE_NAME"] = "mirror"
+    else:
+        os.environ.pop("CHIMERA_GIT_MIRROR_REMOTE_URL", None)
+        os.environ.pop("CHIMERA_GIT_MIRROR_REMOTE_NAME", None)
     app = create_app()
     return TestClient(app)
 
@@ -236,3 +246,70 @@ def test_git_checkpoint_if_needed_pushes_clean_local_head_when_ahead_of_remote(t
         text=True,
     ).stdout.strip()
     assert remote_head == local_head
+
+
+def test_git_checkpoint_pushes_to_mirror_and_creates_backup_tag(tmp_path: Path) -> None:
+    client = make_client(tmp_path, mirror=True)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "README.md").write_text("seed\n", encoding="utf-8")
+
+    init = client.post("/ops/git/init", json={})
+    assert init.status_code == 200
+    init_payload = init.json()
+    assert init_payload["remotes"]["origin"] == str(tmp_path / "remote.git")
+    assert init_payload["remotes"]["mirror"] == str(tmp_path / "mirror.git")
+
+    checkpoint = client.post("/ops/git/checkpoint", json={"reason": "mirror-backup", "push": True})
+    assert checkpoint.status_code == 200
+    payload = checkpoint.json()
+    assert payload["status"] == "ok"
+    assert payload["push_result"]["per_remote"]["origin"]["returncode"] == 0
+    assert payload["push_result"]["per_remote"]["mirror"]["returncode"] == 0
+    assert payload["tag_result"]["returncode"] == 0
+    tag_name = payload["tag_result"]["tag"]
+    assert tag_name.startswith("backup/")
+    assert payload["tag_result"]["per_remote"]["origin"]["returncode"] == 0
+    assert payload["tag_result"]["per_remote"]["mirror"]["returncode"] == 0
+
+    origin_head = subprocess.run(
+        ["git", "--git-dir", str(tmp_path / "remote.git"), "rev-parse", "refs/heads/main"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    mirror_head = subprocess.run(
+        ["git", "--git-dir", str(tmp_path / "mirror.git"), "rev-parse", "refs/heads/main"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    local_head = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert origin_head == local_head
+    assert mirror_head == local_head
+
+    origin_tag = subprocess.run(
+        ["git", "--git-dir", str(tmp_path / "remote.git"), "rev-parse", tag_name],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    mirror_tag = subprocess.run(
+        ["git", "--git-dir", str(tmp_path / "mirror.git"), "rev-parse", tag_name],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert origin_tag
+    assert mirror_tag
+
+    backup_state = client.get("/ops/git/backup-state")
+    assert backup_state.status_code == 200
+    state = backup_state.json()
+    assert state["tag_result"]["tag"] == tag_name
+    assert state["remotes"]["mirror"] == str(tmp_path / "mirror.git")
