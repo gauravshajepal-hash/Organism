@@ -141,6 +141,7 @@ def test_arxiv_scheduler_runs_queries_in_parallel(tmp_path: Path) -> None:
 
     assert len(payload["results"]) == 2
     assert elapsed < 0.35
+    client.close()
 
 
 def test_arxiv_backoff_is_per_query_with_curated_fallback(tmp_path: Path) -> None:
@@ -405,3 +406,4 @@ def test_mutation_lab_evaluates_candidates_in_parallel(tmp_path: Path) -> None:
 
     assert len(job["candidate_run_ids"]) == 2
     assert elapsed < 0.35
+    client.close()

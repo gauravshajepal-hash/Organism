@@ -99,6 +99,7 @@ def test_supervisor_executes_objectives_in_parallel(tmp_path: Path) -> None:
 
     assert {item["objective_id"] for item in results} == {first["id"], second["id"]}
     assert elapsed < 0.35
+    client.close()
 
 
 def test_supervisor_compacts_stale_backlog(tmp_path: Path) -> None:
