@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -363,3 +364,16 @@ def test_git_checkpoint_pushes_to_mirror_and_creates_backup_tag(tmp_path: Path) 
     state = backup_state.json()
     assert state["tag_result"]["tag"] == tag_name
     assert state["remotes"]["mirror"] == (tmp_path / "mirror.git").resolve().as_posix()
+
+
+def test_git_safety_uses_noninteractive_git_env(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    services = client.app.state.services
+
+    with patch("chimera_lab.services.git_safety.subprocess.run") as run_mock:
+        run_mock.return_value = subprocess.CompletedProcess(["git", "status"], 0, stdout="", stderr="")
+        services.git_safety._git(["status"], check=False)
+
+    env = run_mock.call_args.kwargs["env"]
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GCM_INTERACTIVE"] == "never"
