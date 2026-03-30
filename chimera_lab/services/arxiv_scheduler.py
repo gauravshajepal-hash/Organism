@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import threading
 import time
@@ -61,23 +62,24 @@ class ArxivScheduler:
             "queries": queries,
             "query_pool_size": len(all_queries),
             "results": [],
+            "parallel_workers": min(max(1, self.settings.arxiv_parallel_queries), max(1, len(queries))),
         }
-        for query in queries:
-            result = self.paper_digest_service.ingest_query(
-                query,
-                max_results=self.settings.arxiv_max_results_per_query,
-                force=force,
-                digest_top_n=self.settings.arxiv_digest_top_n,
-            )
-            cycle["results"].append(
-                {
-                    "query": query,
-                    "result_count": len(result.get("results", [])),
-                    "digest_count": len(result.get("digests", [])),
-                    "cached": bool(result.get("cached")),
-                    "backoff_active": bool(result.get("backoff_active")),
-                }
-            )
+        if queries:
+            workers = min(max(1, self.settings.arxiv_parallel_queries), len(queries))
+            if workers <= 1 or len(queries) <= 1:
+                for query in queries:
+                    cycle["results"].append(self._run_query(query, force))
+            else:
+                results_by_query: dict[str, dict[str, Any]] = {}
+                with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="chimera-arxiv") as executor:
+                    futures = {
+                        executor.submit(self._run_query, query, force): query
+                        for query in queries
+                    }
+                    for future in as_completed(futures):
+                        query = futures[future]
+                        results_by_query[query] = future.result()
+                cycle["results"] = [results_by_query[query] for query in queries if query in results_by_query]
         state = self._read_state()
         state.update({"last_cycle_at": cycle["ran_at"], "last_result": cycle, "running": bool(state.get("running", False)), "query_cursor": next_cursor})
         self._write_state(state)
@@ -89,6 +91,21 @@ class ArxivScheduler:
         )
         self.runtime_guard.record_event("arxiv_scheduler_cycle", {"query_count": len(queries)})
         return cycle
+
+    def _run_query(self, query: str, force: bool) -> dict[str, Any]:
+        result = self.paper_digest_service.ingest_query(
+            query,
+            max_results=self.settings.arxiv_max_results_per_query,
+            force=force,
+            digest_top_n=self.settings.arxiv_digest_top_n,
+        )
+        return {
+            "query": query,
+            "result_count": len(result.get("results", [])),
+            "digest_count": len(result.get("digests", [])),
+            "cached": bool(result.get("cached")),
+            "backoff_active": bool(result.get("backoff_active")),
+        }
 
     def snapshot(self) -> dict[str, Any]:
         state = self._read_state()

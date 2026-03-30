@@ -32,15 +32,23 @@ def _load_json(value: str | None, default: Any) -> Any:
 
 
 class Storage:
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, busy_timeout_ms: int = 30000) -> None:
         self.db_path = db_path
+        self.busy_timeout_ms = max(1000, int(busy_timeout_ms))
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     @contextmanager
     def connection(self) -> Iterable[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        conn = sqlite3.connect(
+            self.db_path,
+            check_same_thread=False,
+            timeout=max(1.0, self.busy_timeout_ms / 1000),
+        )
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
+        conn.execute("PRAGMA synchronous=NORMAL")
         try:
             yield conn
             conn.commit()
@@ -680,83 +688,54 @@ class Storage:
         noisy_count: int = 0,
         last_event: str | None = None,
     ) -> dict[str, Any]:
-        existing = self.get_scout_feedback(source_ref)
         now = utc_now()
-        if existing is None:
-            row = {
-                "source_ref": source_ref,
-                "referenced_count": max(0, referenced_count),
-                "actionable_count": max(0, actionable_count),
-                "staged_count": max(0, staged_count),
-                "mutation_success_count": max(0, mutation_success_count),
-                "mutation_failure_count": max(0, mutation_failure_count),
-                "preflight_failure_count": max(0, preflight_failure_count),
-                "promotion_count": max(0, promotion_count),
-                "noisy_count": max(0, noisy_count),
-                "last_event": last_event,
-                "updated_at": now,
-            }
-            with self.connection() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO scout_candidate_feedback (
-                        source_ref, referenced_count, actionable_count, staged_count,
-                        mutation_success_count, mutation_failure_count, preflight_failure_count,
-                        promotion_count, noisy_count, last_event, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        row["source_ref"],
-                        row["referenced_count"],
-                        row["actionable_count"],
-                        row["staged_count"],
-                        row["mutation_success_count"],
-                        row["mutation_failure_count"],
-                        row["preflight_failure_count"],
-                        row["promotion_count"],
-                        row["noisy_count"],
-                        row["last_event"],
-                        row["updated_at"],
-                    ),
-                )
-            return row
-
-        updates = {
-            "referenced_count": int(existing.get("referenced_count", 0)) + max(0, referenced_count),
-            "actionable_count": int(existing.get("actionable_count", 0)) + max(0, actionable_count),
-            "staged_count": int(existing.get("staged_count", 0)) + max(0, staged_count),
-            "mutation_success_count": int(existing.get("mutation_success_count", 0)) + max(0, mutation_success_count),
-            "mutation_failure_count": int(existing.get("mutation_failure_count", 0)) + max(0, mutation_failure_count),
-            "preflight_failure_count": int(existing.get("preflight_failure_count", 0)) + max(0, preflight_failure_count),
-            "promotion_count": int(existing.get("promotion_count", 0)) + max(0, promotion_count),
-            "noisy_count": int(existing.get("noisy_count", 0)) + max(0, noisy_count),
-            "last_event": last_event or existing.get("last_event"),
-            "updated_at": now,
-        }
         with self.connection() as conn:
             conn.execute(
                 """
-                UPDATE scout_candidate_feedback
-                SET referenced_count = ?, actionable_count = ?, staged_count = ?,
-                    mutation_success_count = ?, mutation_failure_count = ?, preflight_failure_count = ?,
-                    promotion_count = ?, noisy_count = ?, last_event = ?, updated_at = ?
-                WHERE source_ref = ?
+                INSERT INTO scout_candidate_feedback (
+                    source_ref, referenced_count, actionable_count, staged_count,
+                    mutation_success_count, mutation_failure_count, preflight_failure_count,
+                    promotion_count, noisy_count, last_event, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_ref) DO UPDATE SET
+                    referenced_count = scout_candidate_feedback.referenced_count + excluded.referenced_count,
+                    actionable_count = scout_candidate_feedback.actionable_count + excluded.actionable_count,
+                    staged_count = scout_candidate_feedback.staged_count + excluded.staged_count,
+                    mutation_success_count = scout_candidate_feedback.mutation_success_count + excluded.mutation_success_count,
+                    mutation_failure_count = scout_candidate_feedback.mutation_failure_count + excluded.mutation_failure_count,
+                    preflight_failure_count = scout_candidate_feedback.preflight_failure_count + excluded.preflight_failure_count,
+                    promotion_count = scout_candidate_feedback.promotion_count + excluded.promotion_count,
+                    noisy_count = scout_candidate_feedback.noisy_count + excluded.noisy_count,
+                    last_event = COALESCE(excluded.last_event, scout_candidate_feedback.last_event),
+                    updated_at = excluded.updated_at
                 """,
                 (
-                    updates["referenced_count"],
-                    updates["actionable_count"],
-                    updates["staged_count"],
-                    updates["mutation_success_count"],
-                    updates["mutation_failure_count"],
-                    updates["preflight_failure_count"],
-                    updates["promotion_count"],
-                    updates["noisy_count"],
-                    updates["last_event"],
-                    updates["updated_at"],
                     source_ref,
+                    max(0, referenced_count),
+                    max(0, actionable_count),
+                    max(0, staged_count),
+                    max(0, mutation_success_count),
+                    max(0, mutation_failure_count),
+                    max(0, preflight_failure_count),
+                    max(0, promotion_count),
+                    max(0, noisy_count),
+                    last_event,
+                    now,
                 ),
             )
-        return self.get_scout_feedback(source_ref) or {"source_ref": source_ref, **updates}
+        return self.get_scout_feedback(source_ref) or {
+            "source_ref": source_ref,
+            "referenced_count": max(0, referenced_count),
+            "actionable_count": max(0, actionable_count),
+            "staged_count": max(0, staged_count),
+            "mutation_success_count": max(0, mutation_success_count),
+            "mutation_failure_count": max(0, mutation_failure_count),
+            "preflight_failure_count": max(0, preflight_failure_count),
+            "promotion_count": max(0, promotion_count),
+            "noisy_count": max(0, noisy_count),
+            "last_event": last_event,
+            "updated_at": now,
+        }
 
     def create_review_verdict(self, subject_id: str, reviewer_type: str, decision: str, notes: str, confidence: float, model_tier: str | None = None) -> dict[str, Any]:
         row = {

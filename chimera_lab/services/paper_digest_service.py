@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,6 +46,8 @@ class PaperDigestService:
         self.search_cache_path = self.root / "search_cache.json"
         self.backoff_path = self.root / "arxiv_backoff.json"
         self.digests_path = self.root / "digests.json"
+        self._state_lock = threading.RLock()
+        self._digest_lock = threading.RLock()
 
     def ingest_query(self, query: str, max_results: int | None = None, force: bool = False, digest_top_n: int | None = None) -> dict[str, Any]:
         max_results = max_results or self.settings.arxiv_max_results_per_query
@@ -52,9 +55,10 @@ class PaperDigestService:
         query_plan = self.scout_service.build_query_plan(query)
         fetch_query = query_plan["compact_query"] or query
         query_key = _slug(query.lower().strip())
-        search_cache = self._load_json(self.search_cache_path, {})
-        cached = search_cache.get(query_key)
-        backoff = self._backoff_state(query_key)
+        with self._state_lock:
+            search_cache = self._load_json(self.search_cache_path, {})
+            cached = search_cache.get(query_key)
+            backoff = self._backoff_state(query_key)
 
         if not force and backoff.get("backoff_until", 0) > _now_ts():
             fallback_results = list(cached.get("results", [])) if cached else self._fallback_curated_entries(query, max_results)
@@ -107,15 +111,17 @@ class PaperDigestService:
                 )
             for item in results[: max(0, digest_top_n)]:
                 digests.append(self.digest_paper(item["source_ref"], pdf_url=item["pdf_url"], title=item["title"], force=force))
-            search_cache[query_key] = {
-                "query": query,
-                "fetch_query": fetch_query,
-                "fetched_at": _now_ts(),
-                "results": results,
-                "digests": [{"source_ref": item["source_ref"], "digest_id": item["id"]} for item in digests],
-            }
-            self._save_json(self.search_cache_path, search_cache)
-            self._reset_backoff(query_key)
+            with self._state_lock:
+                search_cache = self._load_json(self.search_cache_path, {})
+                search_cache[query_key] = {
+                    "query": query,
+                    "fetch_query": fetch_query,
+                    "fetched_at": _now_ts(),
+                    "results": results,
+                    "digests": [{"source_ref": item["source_ref"], "digest_id": item["id"]} for item in digests],
+                }
+                self._save_json(self.search_cache_path, search_cache)
+                self._reset_backoff(query_key)
             result = {
                 "query": query,
                 "fetch_query": fetch_query,
@@ -139,7 +145,10 @@ class PaperDigestService:
             )
             return result
         except Exception as exc:  # noqa: BLE001
-            state = self._register_backoff(query_key, str(exc))
+            with self._state_lock:
+                state = self._register_backoff(query_key, str(exc))
+                search_cache = self._load_json(self.search_cache_path, {})
+                cached = search_cache.get(query_key)
             fallback_results = list(cached.get("results", [])) if cached else self._fallback_curated_entries(query, max_results)
             result = {
                 "query": query,
@@ -160,40 +169,42 @@ class PaperDigestService:
             return result
 
     def digest_paper(self, source_ref: str, pdf_url: str | None = None, title: str | None = None, force: bool = False) -> dict[str, Any]:
-        source_ref = canonicalize_source_ref(source_ref)
-        digests = self._load_json(self.digests_path, {})
-        digest_key = _slug(source_ref)
-        if not force and digest_key in digests:
-            return digests[digest_key]
+        with self._digest_lock:
+            source_ref = canonicalize_source_ref(source_ref)
+            digests = self._load_json(self.digests_path, {})
+            digest_key = _slug(source_ref)
+            if not force and digest_key in digests:
+                return digests[digest_key]
 
-        pdf_url = pdf_url or self._pdf_url_for_source(source_ref)
-        pdf_path = self.pdf_dir / f"{digest_key}.pdf"
-        if force or not pdf_path.exists():
-            pdf_bytes = self._download_pdf_bytes(pdf_url)
-            pdf_path.write_bytes(pdf_bytes)
+            pdf_url = pdf_url or self._pdf_url_for_source(source_ref)
+            pdf_path = self.pdf_dir / f"{digest_key}.pdf"
+            if force or not pdf_path.exists():
+                pdf_bytes = self._download_pdf_bytes(pdf_url)
+                pdf_path.write_bytes(pdf_bytes)
 
-        text = self._extract_pdf_text(pdf_path)
-        digest = self._digest_text(source_ref=source_ref, title=title or source_ref, text=text, pdf_url=pdf_url, pdf_path=pdf_path)
-        digests[digest_key] = digest
-        self._save_json(self.digests_path, digests)
-        self.artifact_store.create(
-            "paper_digest",
-            digest,
-            source_refs=[source_ref],
-            created_by="paper_digest_service",
-        )
-        self.memory_tiers.ingest(
-            digest["summary"],
-            tier="semantic",
-            tags=["paper", "digest"],
-            source_refs=[source_ref],
-            metadata={"title": digest["title"], "keywords": digest["keywords"], "pdf_url": pdf_url},
-        )
-        return digest
+            text = self._extract_pdf_text(pdf_path)
+            digest = self._digest_text(source_ref=source_ref, title=title or source_ref, text=text, pdf_url=pdf_url, pdf_path=pdf_path)
+            digests[digest_key] = digest
+            self._save_json(self.digests_path, digests)
+            self.artifact_store.create(
+                "paper_digest",
+                digest,
+                source_refs=[source_ref],
+                created_by="paper_digest_service",
+            )
+            self.memory_tiers.ingest(
+                digest["summary"],
+                tier="semantic",
+                tags=["paper", "digest"],
+                source_refs=[source_ref],
+                metadata={"title": digest["title"], "keywords": digest["keywords"], "pdf_url": pdf_url},
+            )
+            return digest
 
     def list_digests(self) -> list[dict[str, Any]]:
-        digests = self._load_json(self.digests_path, {})
-        return sorted(digests.values(), key=lambda item: item.get("digested_at", ""), reverse=True)
+        with self._digest_lock:
+            digests = self._load_json(self.digests_path, {})
+            return sorted(digests.values(), key=lambda item: item.get("digested_at", ""), reverse=True)
 
     def scheduler_snapshot(self) -> dict[str, Any]:
         backoff = self._normalized_backoff_map()

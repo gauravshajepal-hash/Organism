@@ -150,7 +150,7 @@ def create_app() -> FastAPI:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.blobs_dir.mkdir(parents=True, exist_ok=True)
 
-    storage = Storage(settings.db_path)
+    storage = Storage(settings.db_path, busy_timeout_ms=settings.storage_busy_timeout_ms)
     analytics_mirror = AnalyticsMirror(settings.data_dir / "analytics", prefer_duckdb=True)
     artifact_store = ArtifactStore(storage, analytics_mirror=analytics_mirror)
     skill_registry = SkillRegistry(settings, storage)

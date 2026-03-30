@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,180 +27,187 @@ class GitSafetyService:
     def __post_init__(self) -> None:
         self.repo_root = self.settings.git_root
         self.state_path = self.settings.data_dir / "runtime" / "git_backup_state.json"
+        self._lock = threading.RLock()
 
     def status(self) -> dict[str, Any]:
-        repo_exists = (self.repo_root / ".git").exists()
-        payload: dict[str, Any] = {
-            "repo_root": str(self.repo_root),
-            "repo_exists": repo_exists,
-            "remote_url": None,
-            "remotes": {},
-            "branch": self.settings.git_branch,
-            "upstream": None,
-            "head": None,
-            "dirty": None,
-            "ahead": None,
-            "behind": None,
-            "needs_push": None,
-            "needs_pull": None,
-            "synced": None,
-            "auto_push": self.settings.git_auto_push,
-        }
-        if not repo_exists:
+        with self._lock:
+            repo_exists = (self.repo_root / ".git").exists()
+            payload: dict[str, Any] = {
+                "repo_root": str(self.repo_root),
+                "repo_exists": repo_exists,
+                "remote_url": None,
+                "remotes": {},
+                "branch": self.settings.git_branch,
+                "upstream": None,
+                "head": None,
+                "dirty": None,
+                "ahead": None,
+                "behind": None,
+                "needs_push": None,
+                "needs_pull": None,
+                "synced": None,
+                "auto_push": self.settings.git_auto_push,
+            }
+            if not repo_exists:
+                return payload
+            payload["remote_url"] = self._git_output(["remote", "get-url", "origin"])
+            payload["remotes"] = self._current_remotes()
+            payload["branch"] = self._git_output(["rev-parse", "--abbrev-ref", "HEAD"]) or self.settings.git_branch
+            payload["head"] = self._git_output(["rev-parse", "--short", "HEAD"])
+            payload["dirty"] = bool(self._git_output(["status", "--porcelain"]))
+            payload["upstream"] = self._git_output(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+            divergence = self._branch_divergence(payload["branch"], payload["upstream"])
+            payload.update(divergence)
             return payload
-        payload["remote_url"] = self._git_output(["remote", "get-url", "origin"])
-        payload["remotes"] = self._current_remotes()
-        payload["branch"] = self._git_output(["rev-parse", "--abbrev-ref", "HEAD"]) or self.settings.git_branch
-        payload["head"] = self._git_output(["rev-parse", "--short", "HEAD"])
-        payload["dirty"] = bool(self._git_output(["status", "--porcelain"]))
-        payload["upstream"] = self._git_output(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
-        divergence = self._branch_divergence(payload["branch"], payload["upstream"])
-        payload.update(divergence)
-        return payload
 
     def ensure_repository(self, remote_url: str | None = None, branch: str | None = None) -> dict[str, Any]:
-        remote_url = self._normalize_remote_url((remote_url or self.settings.git_remote_url).strip())
-        branch = (branch or self.settings.git_branch).strip()
-        self.repo_root.mkdir(parents=True, exist_ok=True)
-        if not (self.repo_root / ".git").exists():
-            self._git(["init"], check=True)
-        self._git(["branch", "-M", branch], check=False)
-        self._ensure_identity()
-        self._ensure_remote("origin", remote_url)
-        if self.settings.git_mirror_remote_url:
-            self._ensure_remote(self.settings.git_mirror_remote_name, self._normalize_remote_url(self.settings.git_mirror_remote_url))
-        result = {"status": "ready", **self.status()}
-        self._record("git_repository_ready", result)
-        return result
+        with self._lock:
+            remote_url = self._normalize_remote_url((remote_url or self.settings.git_remote_url).strip())
+            branch = (branch or self.settings.git_branch).strip()
+            self.repo_root.mkdir(parents=True, exist_ok=True)
+            if not (self.repo_root / ".git").exists():
+                self._git(["init"], check=True)
+            self._git(["branch", "-M", branch], check=False)
+            self._ensure_identity()
+            self._ensure_remote("origin", remote_url)
+            if self.settings.git_mirror_remote_url:
+                self._ensure_remote(self.settings.git_mirror_remote_name, self._normalize_remote_url(self.settings.git_mirror_remote_url))
+            result = {"status": "ready", **self.status()}
+            self._record("git_repository_ready", result)
+            return result
 
     def checkpoint(self, reason: str, push: bool | None = None) -> dict[str, Any]:
-        push = self.settings.git_auto_push if push is None else push
-        if not (self.repo_root / ".git").exists():
-            result = {"status": "skipped", "reason": reason, "detail": "repo_not_initialized", **self.status()}
-            self._record("git_checkpoint", result)
-            return result
+        with self._lock:
+            push = self.settings.git_auto_push if push is None else push
+            if not (self.repo_root / ".git").exists():
+                result = {"status": "skipped", "reason": reason, "detail": "repo_not_initialized", **self.status()}
+                self._record("git_checkpoint", result)
+                return result
 
-        self._ensure_identity()
-        self._git(["add", "-A"], check=True)
-        if self.settings.git_secret_scan:
-            secret_gate = self._secret_gate(reason)
-            if secret_gate is not None:
-                self._record("git_checkpoint", secret_gate)
-                return secret_gate
-        dirty = self._git(["diff", "--cached", "--quiet"], check=False)
-        commit_hash = self._git_output(["rev-parse", "--short", "HEAD"])
-
-        if dirty.returncode != 0:
-            message = f"chore(chimera): {_slug(reason)}"
-            self._git(["commit", "-m", message], check=True)
+            self._ensure_identity()
+            self._git(["add", "-A"], check=True)
+            if self.settings.git_secret_scan:
+                secret_gate = self._secret_gate(reason)
+                if secret_gate is not None:
+                    self._record("git_checkpoint", secret_gate)
+                    return secret_gate
+            dirty = self._git(["diff", "--cached", "--quiet"], check=False)
             commit_hash = self._git_output(["rev-parse", "--short", "HEAD"])
 
-        push_result = None
-        tag_result = None
-        if push:
-            if self._git_output(["remote", "get-url", "origin"]):
-                push_result = self._push_branch_to_remotes(self.settings.git_branch)
-                if push_result.get("returncode") == 0 and self.settings.git_backup_tags_enabled:
-                    tag_result = self._create_and_push_backup_tag(reason, commit_hash)
-            else:
-                push_result = {"returncode": 1, "stdout": "", "stderr": "missing_remote_origin"}
+            if dirty.returncode != 0:
+                message = f"chore(chimera): {_slug(reason)}"
+                self._git(["commit", "-m", message], check=True)
+                commit_hash = self._git_output(["rev-parse", "--short", "HEAD"])
 
-        status = "ok"
-        if push_result is not None and push_result.get("returncode") not in {0, None}:
-            status = "push_failed"
-        elif push_result is not None and push_result.get("recovery"):
-            status = "push_reconciled"
-        if tag_result is not None and tag_result.get("returncode") not in {0, None}:
-            status = "push_failed"
-
-        result = {
-            "status": status,
-            "reason": reason,
-            "commit": commit_hash,
-            "pushed": bool(push),
-            "push_result": push_result,
-            "tag_result": tag_result,
-            **self.status(),
-        }
-        if status in {"ok", "push_reconciled"}:
-            self._write_backup_state(result)
-        self._record("git_checkpoint", result)
-        return result
-
-    def checkpoint_if_needed(self, reason: str, push: bool | None = None, force: bool = False) -> dict[str, Any]:
-        status = self.status()
-        if not status.get("repo_exists"):
-            result = {"status": "skipped", "reason": reason, "detail": "repo_not_initialized", **status}
-            self._record("git_checkpoint", result)
-            return result
-        if force:
-            return self.checkpoint(reason, push=push)
-        if status.get("dirty"):
-            return self.checkpoint(reason, push=push)
-        resolved_push = self.settings.git_auto_push if push is None else push
-        if resolved_push and self._needs_remote_sync(status):
-            return self._push_current_head(reason, status)
-        last_backup = self.last_backup_state()
-        if resolved_push and self._backup_stale(last_backup):
-            return self._push_current_head(reason, status, verify_only=True)
-        result = {
-            "status": "clean_noop",
-            "reason": reason,
-            "commit": status.get("head"),
-            "pushed": bool(resolved_push),
-            "last_backup": last_backup,
-            **status,
-        }
-        self._record("git_checkpoint", result)
-        return result
-
-    def last_backup_state(self) -> dict[str, Any] | None:
-        if not self.state_path.exists():
-            return None
-        return json.loads(self.state_path.read_text(encoding="utf-8"))
-
-    def revert_commit(self, commit_hash: str, reason: str, push: bool | None = None) -> dict[str, Any]:
-        push = self.settings.git_auto_push if push is None else push
-        if not (self.repo_root / ".git").exists():
-            result = {"status": "skipped", "reason": reason, "detail": "repo_not_initialized", **self.status()}
-            self._record("git_revert", result)
-            return result
-        self._ensure_identity()
-        revert = self._git(["revert", "--no-edit", commit_hash], check=False)
-        result: dict[str, Any] = {
-            "status": "ok" if revert.returncode == 0 else "revert_failed",
-            "reason": reason,
-            "target_commit": commit_hash,
-            "stdout": revert.stdout.strip(),
-            "stderr": revert.stderr.strip(),
-            **self.status(),
-        }
-        if revert.returncode == 0:
-            result["revert_commit"] = self._git_output(["rev-parse", "--short", "HEAD"])
+            push_result = None
+            tag_result = None
             if push:
                 if self._git_output(["remote", "get-url", "origin"]):
-                    result["push_result"] = self._push_branch_to_remotes(self.settings.git_branch)
-                    if result["push_result"].get("returncode") == 0 and self.settings.git_backup_tags_enabled:
-                        result["tag_result"] = self._create_and_push_backup_tag(reason, result["revert_commit"])
+                    push_result = self._push_branch_to_remotes(self.settings.git_branch)
+                    if push_result.get("returncode") == 0 and self.settings.git_backup_tags_enabled:
+                        tag_result = self._create_and_push_backup_tag(reason, commit_hash)
                 else:
-                    result["push_result"] = {"returncode": 1, "stdout": "", "stderr": "missing_remote_origin"}
-                if result["push_result"].get("returncode") not in {0, None}:
-                    result["status"] = "revert_failed"
-                elif result.get("tag_result") is not None and result["tag_result"].get("returncode") not in {0, None}:
-                    result["status"] = "revert_failed"
-                else:
-                    self._write_backup_state(result)
-            else:
-                if self.settings.git_backup_tags_enabled:
-                    result["tag_result"] = self._create_local_backup_tag(reason, result["revert_commit"])
-                    if result["tag_result"].get("returncode") in {0, None}:
+                    push_result = {"returncode": 1, "stdout": "", "stderr": "missing_remote_origin"}
+
+            status = "ok"
+            if push_result is not None and push_result.get("returncode") not in {0, None}:
+                status = "push_failed"
+            elif push_result is not None and push_result.get("recovery"):
+                status = "push_reconciled"
+            if tag_result is not None and tag_result.get("returncode") not in {0, None}:
+                status = "push_failed"
+
+            result = {
+                "status": status,
+                "reason": reason,
+                "commit": commit_hash,
+                "pushed": bool(push),
+                "push_result": push_result,
+                "tag_result": tag_result,
+                **self.status(),
+            }
+            if status in {"ok", "push_reconciled"}:
+                self._write_backup_state(result)
+            self._record("git_checkpoint", result)
+            return result
+
+    def checkpoint_if_needed(self, reason: str, push: bool | None = None, force: bool = False) -> dict[str, Any]:
+        with self._lock:
+            status = self.status()
+            if not status.get("repo_exists"):
+                result = {"status": "skipped", "reason": reason, "detail": "repo_not_initialized", **status}
+                self._record("git_checkpoint", result)
+                return result
+            if force:
+                return self.checkpoint(reason, push=push)
+            if status.get("dirty"):
+                return self.checkpoint(reason, push=push)
+            resolved_push = self.settings.git_auto_push if push is None else push
+            if resolved_push and self._needs_remote_sync(status):
+                return self._push_current_head(reason, status)
+            last_backup = self.last_backup_state()
+            if resolved_push and self._backup_stale(last_backup):
+                return self._push_current_head(reason, status, verify_only=True)
+            result = {
+                "status": "clean_noop",
+                "reason": reason,
+                "commit": status.get("head"),
+                "pushed": bool(resolved_push),
+                "last_backup": last_backup,
+                **status,
+            }
+            self._record("git_checkpoint", result)
+            return result
+
+    def last_backup_state(self) -> dict[str, Any] | None:
+        with self._lock:
+            if not self.state_path.exists():
+                return None
+            return json.loads(self.state_path.read_text(encoding="utf-8"))
+
+    def revert_commit(self, commit_hash: str, reason: str, push: bool | None = None) -> dict[str, Any]:
+        with self._lock:
+            push = self.settings.git_auto_push if push is None else push
+            if not (self.repo_root / ".git").exists():
+                result = {"status": "skipped", "reason": reason, "detail": "repo_not_initialized", **self.status()}
+                self._record("git_revert", result)
+                return result
+            self._ensure_identity()
+            revert = self._git(["revert", "--no-edit", commit_hash], check=False)
+            result: dict[str, Any] = {
+                "status": "ok" if revert.returncode == 0 else "revert_failed",
+                "reason": reason,
+                "target_commit": commit_hash,
+                "stdout": revert.stdout.strip(),
+                "stderr": revert.stderr.strip(),
+                **self.status(),
+            }
+            if revert.returncode == 0:
+                result["revert_commit"] = self._git_output(["rev-parse", "--short", "HEAD"])
+                if push:
+                    if self._git_output(["remote", "get-url", "origin"]):
+                        result["push_result"] = self._push_branch_to_remotes(self.settings.git_branch)
+                        if result["push_result"].get("returncode") == 0 and self.settings.git_backup_tags_enabled:
+                            result["tag_result"] = self._create_and_push_backup_tag(reason, result["revert_commit"])
+                    else:
+                        result["push_result"] = {"returncode": 1, "stdout": "", "stderr": "missing_remote_origin"}
+                    if result["push_result"].get("returncode") not in {0, None}:
+                        result["status"] = "revert_failed"
+                    elif result.get("tag_result") is not None and result["tag_result"].get("returncode") not in {0, None}:
+                        result["status"] = "revert_failed"
+                    else:
                         self._write_backup_state(result)
                 else:
-                    self._write_backup_state(result)
-        else:
-            self._git(["revert", "--abort"], check=False)
-        self._record("git_revert", result)
-        return result
+                    if self.settings.git_backup_tags_enabled:
+                        result["tag_result"] = self._create_local_backup_tag(reason, result["revert_commit"])
+                        if result["tag_result"].get("returncode") in {0, None}:
+                            self._write_backup_state(result)
+                    else:
+                        self._write_backup_state(result)
+            else:
+                self._git(["revert", "--abort"], check=False)
+            self._record("git_revert", result)
+            return result
 
     def _record(self, artifact_type: str, payload: dict[str, Any]) -> None:
         if self.artifact_store is None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import threading
 from dataclasses import dataclass, field
@@ -82,6 +83,7 @@ class AutonomySupervisor:
             "last_compaction": persisted.get("last_compaction"),
             "objective_count": len(self.storage.list_objectives()),
             "pending_objectives": len(self.storage.list_objectives(status="pending")),
+            "parallel_objective_workers": self._objective_workers(),
             "pending_meta_improvements": len(self._pending_meta_sessions()),
             "pending_ready_mutations": len([run for run in self.storage.list_task_runs() if run["status"] == "ready_for_promotion"]),
             "rollouts": len(self.rollout_manager.list_rollouts()),
@@ -134,7 +136,7 @@ class AutonomySupervisor:
             backup_before = self.git_safety.checkpoint_if_needed("supervisor-cycle-pre", push=True)
         arxiv = self.arxiv_scheduler.run_once(force=False)
         objectives = self.storage.next_due_objectives(limit=self.settings.supervisor_objective_limit)
-        executions = [self._execute_objective(item) for item in objectives]
+        executions = self._execute_objectives(objectives)
         auto_promotions = self.rollout_manager.attempt_auto_promotions(limit=2)
         canaries = self.rollout_manager.run_rollout_canaries(limit=4)
         backup_after = None
@@ -145,6 +147,7 @@ class AutonomySupervisor:
             "backlog_compaction": backlog_compaction,
             "arxiv": arxiv,
             "objective_count": len(objectives),
+            "parallel_objective_workers": self._objective_workers(len(objectives)),
             "executions": executions,
             "auto_promotions": auto_promotions,
             "rollout_canaries": canaries,
@@ -161,7 +164,11 @@ class AutonomySupervisor:
         )
         self.runtime_guard.record_event(
             "supervisor_cycle",
-            {"objective_ids": [item["id"] for item in objectives], "auto_promotions": len(auto_promotions)},
+            {
+                "objective_ids": [item["id"] for item in objectives],
+                "auto_promotions": len(auto_promotions),
+                "parallel_objective_workers": self._objective_workers(len(objectives)),
+            },
         )
         return result
 
@@ -274,6 +281,28 @@ class AutonomySupervisor:
             updated = self.storage.update_objective(objective["id"], status="failed", metadata={**metadata, "last_error": str(exc)})
             self.runtime_guard.record_exception("objective_execution", str(exc), {"objective_id": objective["id"], "kind": kind}, push_backup=True)
             return {"objective_id": objective["id"], "kind": kind, "status": updated["status"], "error": str(exc)}
+
+    def _objective_workers(self, objective_count: int | None = None) -> int:
+        count = len(self.storage.list_objectives(status="pending")) if objective_count is None else objective_count
+        return max(1, min(self.settings.supervisor_parallel_objectives, max(1, count)))
+
+    def _execute_objectives(self, objectives: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not objectives:
+            return []
+        workers = self._objective_workers(len(objectives))
+        if workers <= 1 or len(objectives) <= 1:
+            return [self._execute_objective(item) for item in objectives]
+
+        executions: dict[str, dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="chimera-objective") as executor:
+            futures = {
+                executor.submit(self._execute_objective, item): item["id"]
+                for item in objectives
+            }
+            for future in as_completed(futures):
+                objective_id = futures[future]
+                executions[objective_id] = future.result()
+        return [executions[item["id"]] for item in objectives if item["id"] in executions]
 
     def _execute_run_objective(self, objective: dict[str, Any]) -> dict[str, Any]:
         mission = self.storage.create_mission(

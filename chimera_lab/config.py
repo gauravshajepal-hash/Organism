@@ -39,10 +39,12 @@ class Settings:
     gemini_api_key: str | None
     gemini_model: str
     local_retry_limit: int
+    storage_busy_timeout_ms: int
     scout_seed_urls: list[str]
     mutation_max_files: int
     mutation_max_changed_lines: int
     mutation_review_min_confidence: float
+    mutation_parallel_candidates: int
     tree_search_branch_factor: int
     tree_search_depth: int
     tree_search_parallel_tracks: int
@@ -62,9 +64,11 @@ class Settings:
     arxiv_digest_top_n: int
     arxiv_default_queries: list[str]
     arxiv_queries_per_cycle: int
+    arxiv_parallel_queries: int
     supervisor_enabled: bool
     supervisor_poll_interval_seconds: int
     supervisor_objective_limit: int
+    supervisor_parallel_objectives: int
     supervisor_stable_cycles_required: int
     supervisor_auto_promote_enabled: bool
     supervisor_default_objectives: list[str]
@@ -117,10 +121,12 @@ def load_settings() -> Settings:
         gemini_api_key=os.getenv("GEMINI_API_KEY"),
         gemini_model=os.getenv("CHIMERA_GEMINI_MODEL", "gemini-2.5-pro"),
         local_retry_limit=int(os.getenv("CHIMERA_LOCAL_RETRY_LIMIT", "2")),
+        storage_busy_timeout_ms=int(os.getenv("CHIMERA_STORAGE_BUSY_TIMEOUT_MS", "30000")),
         scout_seed_urls=scout_seed_urls,
         mutation_max_files=int(os.getenv("CHIMERA_MUTATION_MAX_FILES", "3")),
         mutation_max_changed_lines=int(os.getenv("CHIMERA_MUTATION_MAX_CHANGED_LINES", "240")),
         mutation_review_min_confidence=float(os.getenv("CHIMERA_MUTATION_REVIEW_MIN_CONFIDENCE", "0.6")),
+        mutation_parallel_candidates=int(os.getenv("CHIMERA_MUTATION_PARALLEL_CANDIDATES", "4")),
         tree_search_branch_factor=int(os.getenv("CHIMERA_TREE_SEARCH_BRANCH_FACTOR", "3")),
         tree_search_depth=int(os.getenv("CHIMERA_TREE_SEARCH_DEPTH", "3")),
         tree_search_parallel_tracks=int(os.getenv("CHIMERA_TREE_SEARCH_PARALLEL_TRACKS", "3")),
@@ -153,9 +159,11 @@ def load_settings() -> Settings:
             if item.strip()
         ],
         arxiv_queries_per_cycle=int(os.getenv("CHIMERA_ARXIV_QUERIES_PER_CYCLE", "3")),
+        arxiv_parallel_queries=int(os.getenv("CHIMERA_ARXIV_PARALLEL_QUERIES", "3")),
         supervisor_enabled=_env_flag("CHIMERA_ENABLE_SUPERVISOR", background_default),
         supervisor_poll_interval_seconds=int(os.getenv("CHIMERA_SUPERVISOR_POLL_INTERVAL_SECONDS", "900")),
         supervisor_objective_limit=int(os.getenv("CHIMERA_SUPERVISOR_OBJECTIVE_LIMIT", "3")),
+        supervisor_parallel_objectives=int(os.getenv("CHIMERA_SUPERVISOR_PARALLEL_OBJECTIVES", "3")),
         supervisor_stable_cycles_required=int(os.getenv("CHIMERA_SUPERVISOR_STABLE_CYCLES_REQUIRED", "2")),
         supervisor_auto_promote_enabled=_env_flag("CHIMERA_SUPERVISOR_AUTO_PROMOTE", True),
         supervisor_default_objectives=[

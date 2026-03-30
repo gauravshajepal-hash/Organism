@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import unified_diff
 from pathlib import Path
+import uuid
 
 from chimera_lab.db import Storage
 from chimera_lab.services.artifact_store import ArtifactStore
@@ -27,12 +29,18 @@ class MutationLab:
         mission = self.storage.get_mission(program["mission_id"]) if program else None
 
         candidate_run_ids: list[str] = []
+        staged_candidates: list[tuple[dict, str]] = []
         if auto_stage:
             operators = self._operators_for(strategy, iterations)
             for operator in operators:
                 isolated_target = base_run["target_path"]
                 if base_run["target_path"]:
-                    isolated_target = str(self.sandbox_runner.prepare_worktree(base_run["target_path"], f"{run_id}_{operator}"))
+                    isolated_target = str(
+                        self.sandbox_runner.prepare_worktree(
+                            base_run["target_path"],
+                            f"{run_id}_{operator}_{uuid.uuid4().hex[:8]}",
+                        )
+                    )
                 candidate = self.storage.create_task_run(
                     program_id=base_run["program_id"],
                     task_type=base_run["task_type"],
@@ -57,24 +65,8 @@ class MutationLab:
                     },
                 )
                 candidate_run_ids.append(candidate["id"])
-                try:
-                    self._apply_and_evaluate_candidate(mission, program, candidate, base_run, operator)
-                except Exception as exc:  # noqa: BLE001
-                    self.storage.update_task_run(
-                        candidate["id"],
-                        status="failed",
-                        result_summary=f"Mutation staging failed: {exc}"[:500],
-                    )
-                    self.artifact_store.create(
-                        "mutation_candidate_error",
-                        {
-                            "candidate_run_id": candidate["id"],
-                            "operator": operator,
-                            "error": str(exc),
-                        },
-                        source_refs=[candidate["id"], run_id],
-                        created_by="mutation_lab",
-                    )
+                staged_candidates.append((candidate, operator))
+            self._evaluate_candidates_parallel(mission, program, staged_candidates, base_run)
 
         job = self.storage.create_mutation_job(run_id, strategy, iterations, candidate_run_ids)
         self.artifact_store.create(
@@ -84,6 +76,7 @@ class MutationLab:
                 "run_id": run_id,
                 "strategy": strategy,
                 "candidate_run_ids": candidate_run_ids,
+                "parallel_workers": self._candidate_workers(len(candidate_run_ids)),
             },
             source_refs=[run_id, *candidate_run_ids],
             created_by="mutation_lab",
@@ -152,6 +145,58 @@ class MutationLab:
             "explore": ["diverge", "counterfactual", "alternative", "stress"],
         }.get(strategy, [strategy, "simplify", "repair", "diagnose"])
         return base[: max(1, iterations)]
+
+    def _candidate_workers(self, candidate_count: int) -> int:
+        return max(1, min(self.guardrails.settings.mutation_parallel_candidates, candidate_count))
+
+    def _evaluate_candidates_parallel(
+        self,
+        mission: dict | None,
+        program: dict | None,
+        staged_candidates: list[tuple[dict, str]],
+        base_run: dict,
+    ) -> None:
+        if not staged_candidates:
+            return
+        workers = self._candidate_workers(len(staged_candidates))
+        if workers <= 1:
+            for candidate, operator in staged_candidates:
+                self._evaluate_candidate_with_guard(mission, program, candidate, base_run, operator)
+            return
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="chimera-mutation") as executor:
+            futures = {
+                executor.submit(self._evaluate_candidate_with_guard, mission, program, candidate, base_run, operator): candidate["id"]
+                for candidate, operator in staged_candidates
+            }
+            for future in as_completed(futures):
+                future.result()
+
+    def _evaluate_candidate_with_guard(
+        self,
+        mission: dict | None,
+        program: dict | None,
+        candidate: dict,
+        base_run: dict,
+        operator: str,
+    ) -> None:
+        try:
+            self._apply_and_evaluate_candidate(mission, program, candidate, base_run, operator)
+        except Exception as exc:  # noqa: BLE001
+            self.storage.update_task_run(
+                candidate["id"],
+                status="failed",
+                result_summary=f"Mutation staging failed: {exc}"[:500],
+            )
+            self.artifact_store.create(
+                "mutation_candidate_error",
+                {
+                    "candidate_run_id": candidate["id"],
+                    "operator": operator,
+                    "error": str(exc),
+                },
+                source_refs=[candidate["id"], base_run["id"]],
+                created_by="mutation_lab",
+            )
 
     def _apply_and_evaluate_candidate(self, mission: dict | None, program: dict | None, candidate: dict, base_run: dict, operator: str) -> None:
         target_path = candidate.get("target_path")

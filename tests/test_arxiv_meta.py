@@ -117,6 +117,32 @@ def test_arxiv_scheduler_uses_recent_queries(tmp_path: Path) -> None:
         assert any("memory" in query.lower() and "coding" in query.lower() for query in seen_queries)
 
 
+def test_arxiv_scheduler_runs_queries_in_parallel(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    services = client.app.state.services
+    services.settings.arxiv_default_queries = ["query one", "query two"]
+    services.settings.arxiv_queries_per_cycle = 2
+    services.settings.arxiv_parallel_queries = 2
+
+    def slow_ingest(query, max_results=None, force=False, digest_top_n=None):  # noqa: ARG001
+        time.sleep(0.2)
+        return {
+            "query": query,
+            "results": [{"source_ref": f"https://arxiv.org/abs/{query.replace(' ', '')}"}],
+            "digests": [],
+            "cached": False,
+            "backoff_active": False,
+        }
+
+    with patch.object(type(services.paper_digest_service), "ingest_query", side_effect=slow_ingest):
+        started = time.perf_counter()
+        payload = services.arxiv_scheduler.run_once(force=True)
+        elapsed = time.perf_counter() - started
+
+    assert len(payload["results"]) == 2
+    assert elapsed < 0.35
+
+
 def test_arxiv_backoff_is_per_query_with_curated_fallback(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     service = client.app.state.services.paper_digest_service
@@ -346,3 +372,36 @@ def test_mutation_lab_normalizes_generated_paths(tmp_path: Path) -> None:
     assert errors == []
     assert applied[0]["path"] == "chimera_lab/services/run_automation.py"
     assert target.read_text(encoding="utf-8") == "new value\n"
+
+
+def test_mutation_lab_evaluates_candidates_in_parallel(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    services = client.app.state.services
+    services.settings.mutation_parallel_candidates = 2
+    _, program_id = create_seed_objects(client)
+
+    workspace = tmp_path / "parallel_mutation_workspace"
+    workspace.mkdir()
+    (workspace / "main.py").write_text("print('ok')\n", encoding="utf-8")
+
+    base_run = client.post(
+        f"/programs/{program_id}/runs",
+        json={
+            "task_type": "code",
+            "instructions": "Stage parallel mutations.",
+            "command": "python -c \"print('ok')\"",
+            "target_path": str(workspace),
+        },
+    ).json()
+
+    def slow_evaluate(self, mission, program, candidate, base_run, operator):  # noqa: ARG001
+        time.sleep(0.2)
+        self.storage.update_task_run(candidate["id"], status="failed", result_summary=f"{operator} complete")
+
+    with patch.object(MutationLab, "_apply_and_evaluate_candidate", autospec=True, side_effect=slow_evaluate):
+        started = time.perf_counter()
+        job = services.mutation_lab.stage_job(base_run["id"], "repair", 2, auto_stage=True)
+        elapsed = time.perf_counter() - started
+
+    assert len(job["candidate_run_ids"]) == 2
+    assert elapsed < 0.35

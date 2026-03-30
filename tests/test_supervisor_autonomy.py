@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import time
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -67,6 +68,37 @@ def test_supervisor_run_once_executes_pending_meta_improvement(tmp_path: Path) -
         }
         assert session["id"] in executed_sessions
         assert checkpoint_mock.call_count >= 2
+
+
+def test_supervisor_executes_objectives_in_parallel(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    services = client.app.state.services
+    services.settings.supervisor_parallel_objectives = 2
+    first = services.storage.enqueue_objective(
+        kind="research_ingest",
+        title="Parallel one",
+        objective="Discover memory work",
+        priority="high",
+    )
+    second = services.storage.enqueue_objective(
+        kind="plan",
+        title="Parallel two",
+        objective="Plan mutation safety",
+        priority="high",
+    )
+    objectives = services.storage.next_due_objectives(limit=2)
+
+    def slow_execute(objective: dict[str, object]) -> dict[str, object]:
+        time.sleep(0.2)
+        return {"objective_id": objective["id"], "status": "completed"}  # type: ignore[index]
+
+    with patch.object(type(services.autonomy_supervisor), "_execute_objective", side_effect=slow_execute):
+        started = time.perf_counter()
+        results = services.autonomy_supervisor._execute_objectives(objectives)  # noqa: SLF001
+        elapsed = time.perf_counter() - started
+
+    assert {item["objective_id"] for item in results} == {first["id"], second["id"]}
+    assert elapsed < 0.35
 
 
 def test_supervisor_compacts_stale_backlog(tmp_path: Path) -> None:
