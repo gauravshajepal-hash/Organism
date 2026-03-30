@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -122,6 +123,7 @@ class GitHubRepoService:
             text=True,
             timeout=180,
             check=check,
+            env=self._git_env(),
         )
 
     def _git_output(self, args: list[str], cwd: Path) -> str | None:
@@ -130,3 +132,9 @@ class GitHubRepoService:
             return None
         value = result.stdout.strip()
         return value or None
+
+    def _git_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GCM_INTERACTIVE"] = "never"
+        return env
