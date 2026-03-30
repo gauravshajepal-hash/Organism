@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -218,7 +219,14 @@ class GitSafetyService:
             text=True,
             timeout=120,
             check=check,
+            env=self._git_env(),
         )
+
+    def _git_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GCM_INTERACTIVE"] = "never"
+        return env
 
     def _git_output(self, args: list[str]) -> str | None:
         result = self._git(args, check=False)
