@@ -18,6 +18,7 @@ def make_client(tmp_path: Path, repo_root: Path | None = None) -> TestClient:
     os.environ["CHIMERA_FRONTIER_PROVIDER"] = "manual"
     os.environ["CHIMERA_ENABLE_BACKGROUND_INGESTION"] = "0"
     os.environ["CHIMERA_ENABLE_SUPERVISOR"] = "0"
+    os.environ["CHIMERA_GIT_BACKUP_ON_STARTUP"] = "0"
     if repo_root is not None:
         os.environ["CHIMERA_GIT_ROOT"] = str(repo_root)
     app = create_app()
