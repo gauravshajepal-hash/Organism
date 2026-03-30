@@ -149,6 +149,66 @@ function renderStackList(el, items, render, emptyTitle, emptyBody) {
   });
 }
 
+function buildLabNotebookEntries(artifacts) {
+  const lessons = reverseByDate(artifacts.filter((item) => item.type === "failure_lesson"));
+  const nextSteps = reverseByDate(artifacts.filter((item) => item.type === "next_step_hypothesis"));
+  const nextByRun = new Map();
+  nextSteps.forEach((artifact) => {
+    const runId = artifact?.payload?.run_id;
+    if (runId && !nextByRun.has(runId)) {
+      nextByRun.set(runId, artifact);
+    }
+  });
+
+  const entries = lessons.slice(0, 6).map((lesson) => {
+    const runId = lesson?.payload?.run_id;
+    const nextStep = nextByRun.get(runId) || null;
+    return {
+      runId,
+      created_at: lesson.created_at,
+      taskType: lesson?.payload?.task_type || "run",
+      failureKind: lesson?.payload?.failure_kind || "failure",
+      lesson: lesson?.payload?.lesson || lesson?.payload?.failure_reason || "No lesson recorded.",
+      nextMove: nextStep?.payload?.next_move || "No next step recorded yet.",
+      creativeDirections: nextStep?.payload?.creative_directions || [],
+    };
+  });
+
+  nextSteps.slice(0, 6).forEach((nextStep) => {
+    const runId = nextStep?.payload?.run_id;
+    if (entries.some((entry) => entry.runId === runId)) {
+      return;
+    }
+    entries.push({
+      runId,
+      created_at: nextStep.created_at,
+      taskType: nextStep?.payload?.task_type || "run",
+      failureKind: nextStep?.payload?.failure_kind || "failure",
+      lesson: "A next step exists, but the paired lesson artifact was not found in this window.",
+      nextMove: nextStep?.payload?.next_move || "No next step recorded yet.",
+      creativeDirections: nextStep?.payload?.creative_directions || [],
+    });
+  });
+
+  return reverseByDate(entries).slice(0, 6);
+}
+
+function renderLabNotebook(entries) {
+  document.getElementById("labNotebookCount").textContent = String(entries.length);
+  renderStackList(
+    document.getElementById("labNotebookList"),
+    entries,
+    (entry) => `
+      <strong>${escapeHtml(taskLabel(entry.taskType))} notebook</strong>
+      <p><strong>What failed:</strong> ${escapeHtml(truncate(entry.lesson, 180))}</p>
+      <p><strong>What to try next:</strong> ${escapeHtml(truncate(entry.nextMove, 180))}</p>
+      <small>${escapeHtml(formatTime(entry.created_at))}</small>
+    `,
+    "No notebook entries",
+    "Failure lessons and next-step hypotheses will appear here after the first failed run or failed mutation.",
+  );
+}
+
 function humanSourceLabel(sourceRef, scoutMap) {
   const scout = scoutMap.get(sourceRef);
   if (scout) {
@@ -192,6 +252,8 @@ async function loadMutationDetail(run, scoutMap) {
   const preflightArtifact = latest("mutation_preflight");
   const applyRepairArtifact = latest("mutation_apply_repair");
   const preflightRepairArtifact = latest("mutation_preflight_repair");
+  const failureLessonArtifact = latest("failure_lesson");
+  const nextStepArtifact = latest("next_step_hypothesis");
   const winningReview = [...reviews]
     .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))[0] || null;
 
@@ -205,6 +267,9 @@ async function loadMutationDetail(run, scoutMap) {
   const reviewText = winningReview
     ? `${winningReview.reviewer_type} said "${winningReview.decision}" with confidence ${Number(winningReview.confidence || 0).toFixed(2)}.`
     : "No second-layer review yet.";
+  const failureLessonText = failureLessonArtifact?.payload?.lesson || "No explicit lesson has been recorded for this mutation yet.";
+  const nextStepText = nextStepArtifact?.payload?.next_move || "No next-step hypothesis has been recorded yet.";
+  const creativeDirections = nextStepArtifact?.payload?.creative_directions || [];
   const repairNotes = [];
   if (applyRepairArtifact) {
     repairNotes.push("The first patch did not apply cleanly, so the organism tried one smaller repair patch.");
@@ -231,6 +296,9 @@ async function loadMutationDetail(run, scoutMap) {
     selectedFiles,
     guardrailText,
     reviewText,
+    failureLessonText,
+    nextStepText,
+    creativeDirections,
     nextStep: statusLabel(run.status),
     repairNotes,
   };
@@ -329,6 +397,14 @@ function renderMutationDetail(detail) {
         <p>${escapeHtml(detail.guardrailText)}</p>
       </div>
       <div class="focus-item">
+        <strong>What it learned</strong>
+        <p>${escapeHtml(detail.failureLessonText)}</p>
+      </div>
+      <div class="focus-item">
+        <strong>What it wants to try next</strong>
+        <p>${escapeHtml(detail.nextStepText)}</p>
+      </div>
+      <div class="focus-item">
         <strong>Review result</strong>
         <p>${escapeHtml(detail.reviewText)}</p>
       </div>
@@ -350,6 +426,14 @@ function renderMutationDetail(detail) {
         <strong>Repair history</strong>
         <ul>
           ${detail.repairNotes.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ul>
+      </div>
+    ` : ""}
+    ${detail.creativeDirections.length ? `
+      <div class="focus-subsection">
+        <strong>Creative directions</strong>
+        <ul>
+          ${detail.creativeDirections.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
         </ul>
       </div>
     ` : ""}
@@ -502,6 +586,7 @@ async function refreshDashboard() {
     gitStatus,
     objectives,
     scoutCandidates,
+    artifacts,
   ] = await Promise.all([
     safeApi("/missions", []),
     safeApi("/runs", []),
@@ -510,6 +595,7 @@ async function refreshDashboard() {
     safeApi("/ops/git/status", {}),
     safeApi("/objectives", []),
     safeApi("/scout/candidates", []),
+    safeApi("/artifacts?limit=120", []),
   ]);
 
   const scoutMap = new Map(scoutCandidates.map((item) => [item.source_ref, item]));
@@ -543,6 +629,7 @@ async function refreshDashboard() {
   );
   renderMutationList(mutationDetails);
   renderMutationDetail(mutationDetails.find((item) => item.run.id === state.selectedMutationId) || null);
+  renderLabNotebook(buildLabNotebookEntries(artifacts));
   renderThread(buildThread(runs, new Set(mutationRuns.map((item) => item.id))));
 }
 
