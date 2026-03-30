@@ -184,3 +184,12 @@ CacheFilePath: C:\Users\gaura\AppData\Local\.IdentityService\msal.cache
 Creating cache helper... OK
 Verifying MSAL token cache persistence... OK
 
+------------
+Diagnostic: GitHub API
+Skipped: False
+Success: True
+Exception: None
+Log:
+Using 'https://github.com/' as API target.
+Querying '/meta' endpoint... OK
+
