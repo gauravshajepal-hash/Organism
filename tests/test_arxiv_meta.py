@@ -178,6 +178,21 @@ def test_arxiv_backoff_is_per_query_with_curated_fallback(tmp_path: Path) -> Non
         assert succeeded_payload["results"][0]["source_ref"] == "https://arxiv.org/abs/2601.00002"
 
 
+def test_paper_digest_scheduler_snapshot_tolerates_legacy_backoff_shape(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    backoff_path = tmp_path / "data" / "papers" / "arxiv_backoff.json"
+    backoff_path.parent.mkdir(parents=True, exist_ok=True)
+    backoff_path.write_text(
+        '{"consecutive_failures": 6, "backoff_until": 1774825330, "last_error": "legacy", "abc123": {"consecutive_failures": 1, "backoff_until": 1774825330, "last_error": "429"}}',
+        encoding="utf-8",
+    )
+
+    snapshot = client.app.state.services.paper_digest_service.scheduler_snapshot()
+    assert "consecutive_failures" not in snapshot["backoff"]
+    assert snapshot["backoff"]["abc123"]["consecutive_failures"] == 1
+    assert snapshot["active_backoffs"] == 1
+
+
 def test_execute_meta_improvement_creates_mutation_job(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     session = client.post(

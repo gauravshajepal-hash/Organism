@@ -196,10 +196,10 @@ class PaperDigestService:
         return sorted(digests.values(), key=lambda item: item.get("digested_at", ""), reverse=True)
 
     def scheduler_snapshot(self) -> dict[str, Any]:
-        backoff = self._load_json(self.backoff_path, {})
+        backoff = self._normalized_backoff_map()
         return {
             "backoff": backoff,
-            "active_backoffs": sum(1 for item in backoff.values() if int(item.get("backoff_until", 0)) > _now_ts()) if isinstance(backoff, dict) else 0,
+            "active_backoffs": sum(1 for item in backoff.values() if int(item.get("backoff_until", 0)) > _now_ts()),
             "cached_queries": len(self._load_json(self.search_cache_path, {})),
             "digests": len(self._load_json(self.digests_path, {})),
         }
@@ -249,15 +249,11 @@ class PaperDigestService:
         return results
 
     def _backoff_state(self, query_key: str) -> dict[str, Any]:
-        state = self._load_json(self.backoff_path, {})
-        if not isinstance(state, dict):
-            return {"consecutive_failures": 0, "backoff_until": 0, "last_error": None}
+        state = self._normalized_backoff_map()
         return dict(state.get(query_key) or {"consecutive_failures": 0, "backoff_until": 0, "last_error": None})
 
     def _register_backoff(self, query_key: str, error: str) -> dict[str, Any]:
-        state = self._load_json(self.backoff_path, {})
-        if not isinstance(state, dict):
-            state = {}
+        state = self._normalized_backoff_map()
         entry = dict(state.get(query_key) or {"consecutive_failures": 0, "backoff_until": 0, "last_error": None})
         failures = int(entry.get("consecutive_failures", 0)) + 1
         delay = min(self.settings.arxiv_backoff_max_seconds, self.settings.arxiv_backoff_base_seconds * (2 ** max(0, failures - 1)))
@@ -271,11 +267,23 @@ class PaperDigestService:
         return updated
 
     def _reset_backoff(self, query_key: str) -> None:
-        state = self._load_json(self.backoff_path, {})
-        if not isinstance(state, dict):
-            state = {}
+        state = self._normalized_backoff_map()
         state[query_key] = {"consecutive_failures": 0, "backoff_until": 0, "last_error": None}
         self._save_json(self.backoff_path, state)
+
+    def _normalized_backoff_map(self) -> dict[str, dict[str, Any]]:
+        raw = self._load_json(self.backoff_path, {})
+        if not isinstance(raw, dict):
+            return {}
+        normalized: dict[str, dict[str, Any]] = {}
+        for key, value in raw.items():
+            if isinstance(value, dict):
+                normalized[key] = {
+                    "consecutive_failures": int(value.get("consecutive_failures", 0)),
+                    "backoff_until": int(value.get("backoff_until", 0)),
+                    "last_error": value.get("last_error"),
+                }
+        return normalized
 
     def _fallback_curated_entries(self, query: str, max_results: int) -> list[dict[str, Any]]:
         readme_urls = [
