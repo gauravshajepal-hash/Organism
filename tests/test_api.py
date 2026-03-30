@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import patch
+import subprocess
 
 from fastapi.testclient import TestClient
 
@@ -138,6 +139,21 @@ def test_code_run_can_materialize_github_repo_before_execution(tmp_path: Path) -
     assert refreshed["target_path"] == str(external_repo)
     assert refreshed["input_payload"]["github_repo_url"] == "https://github.com/example/remote-repo.git"
     assert refreshed["input_payload"]["github_repo_local_path"] == str(external_repo)
+
+
+def test_github_repo_service_uses_noninteractive_git_env(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    services = client.app.state.services
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    with patch("chimera_lab.services.github_repo_service.subprocess.run") as run_mock:
+        run_mock.return_value = subprocess.CompletedProcess(["git", "status"], 0, stdout="", stderr="")
+        services.github_repo_service._git(["status"], cwd=repo_root, check=False)
+
+    env = run_mock.call_args.kwargs["env"]
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GCM_INTERACTIVE"] == "never"
 
 
 def test_frontier_run_flow(tmp_path: Path) -> None:
