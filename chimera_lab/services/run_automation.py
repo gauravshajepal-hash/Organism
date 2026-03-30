@@ -40,11 +40,6 @@ class RunAutomation:
         query = str(payload.get("research_question") or run.get("instructions") or "").strip()
         if not query:
             return run
-        
-        # Safety: validate query bounds before processing
-        if len(query) > 2000 or len(query) < 1:
-            payload["error"] = "Invalid query length"
-            return payload
 
         auto_organs: list[str] = list(payload.get("auto_organs") or [])
 
