@@ -115,6 +115,51 @@ def test_runtime_guard_recovers_unclean_shutdown(tmp_path: Path) -> None:
     assert latest_crash["last_events"][0]["event_type"] == "run_started"
 
 
+def test_runtime_guard_recovers_unclean_shutdown_with_bom_session_file(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    runtime_dir = data_dir / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "session.json").write_text(
+        json.dumps({"session_id": "session_old", "started_at": "2026-03-29T00:00:00+00:00", "active": True}),
+        encoding="utf-8-sig",
+    )
+    with (runtime_dir / "events.jsonl").open("w", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "event_id": "event_1",
+                    "session_id": "session_old",
+                    "event_type": "run_started",
+                    "details": {"run_id": "run_old"},
+                    "created_at": "2026-03-29T00:01:00+00:00",
+                }
+            )
+        )
+        handle.write("\n")
+
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
+
+    os.environ["CHIMERA_DATA_DIR"] = str(data_dir)
+    os.environ["CHIMERA_ENABLE_OLLAMA"] = "0"
+    os.environ["CHIMERA_SANDBOX_MODE"] = "local"
+    os.environ["CHIMERA_FRONTIER_PROVIDER"] = "manual"
+    os.environ["CHIMERA_GIT_ROOT"] = str(tmp_path / "repo")
+    os.environ["CHIMERA_GIT_REMOTE_URL"] = str(remote)
+    os.environ["CHIMERA_GIT_AUTOPUSH"] = "0"
+    os.environ.pop("CHIMERA_GIT_MIRROR_REMOTE_URL", None)
+    os.environ.pop("CHIMERA_GIT_MIRROR_REMOTE_NAME", None)
+
+    app = create_app()
+    client = TestClient(app)
+    runtime = client.get("/ops/runtime")
+    assert runtime.status_code == 200
+    latest_crash = runtime.json()["latest_crash"]
+    assert latest_crash is not None
+    assert latest_crash["kind"] == "unclean_shutdown"
+    assert latest_crash["last_events"][0]["event_type"] == "run_started"
+
+
 def test_git_checkpoint_reconciles_non_fast_forward_push(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     repo_root = tmp_path / "repo"

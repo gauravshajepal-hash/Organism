@@ -36,7 +36,7 @@ class RuntimeGuard:
     def begin_session(self) -> dict[str, Any] | None:
         recovered = None
         if self.session_path.exists():
-            previous = json.loads(self.session_path.read_text(encoding="utf-8"))
+            previous = self._read_json_file(self.session_path, default={})
             if previous.get("active"):
                 recovered = {
                     "crash_id": f"crash_{uuid.uuid4().hex[:12]}",
@@ -127,7 +127,7 @@ class RuntimeGuard:
     def _current_session(self) -> dict[str, Any]:
         if not self.session_path.exists():
             return {"session_id": self.session_id, "active": False}
-        return json.loads(self.session_path.read_text(encoding="utf-8"))
+        return self._read_json_file(self.session_path, default={"session_id": self.session_id, "active": False})
 
     def _append_jsonl(self, path: Path, payload: dict[str, Any]) -> None:
         with path.open("a", encoding="utf-8") as handle:
@@ -144,3 +144,13 @@ class RuntimeGuard:
                 if line:
                     rows.append(json.loads(line))
         return rows
+
+    def _read_json_file(self, path: Path, default: dict[str, Any]) -> dict[str, Any]:
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+            payload = json.loads(text)
+            if isinstance(payload, dict):
+                return payload
+        except (OSError, json.JSONDecodeError):
+            pass
+        return default.copy()
