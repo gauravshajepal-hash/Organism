@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import socket
+import sys
 from typing import Sequence
 
 import uvicorn
@@ -10,6 +12,37 @@ import uvicorn
 def _set_default_env(name: str, value: str) -> None:
     if not os.getenv(name):
         os.environ[name] = value
+
+
+def _port_available(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def _select_port(host: str, preferred_port: int, attempts: int = 20) -> tuple[int, bool]:
+    if _port_available(host, preferred_port):
+        return preferred_port, False
+    for offset in range(1, attempts + 1):
+        candidate = preferred_port + offset
+        if _port_available(host, candidate):
+            return candidate, True
+    raise RuntimeError(f"No free port found from {preferred_port} to {preferred_port + attempts}.")
+
+
+def _print_startup_summary(host: str, port: int, model: str, frontier_provider: str, supervisor_enabled: bool, background_ingestion_enabled: bool, port_changed: bool) -> None:
+    url = f"http://{host}:{port}/"
+    if port_changed:
+        print(f"[organism] Port 8000 was busy, using {port} instead.", file=sys.stderr)
+    print(f"[organism] UI: {url}", file=sys.stderr)
+    print(f"[organism] Local model: {model}", file=sys.stderr)
+    print(f"[organism] Frontier provider: {frontier_provider}", file=sys.stderr)
+    print(f"[organism] Supervisor: {'on' if supervisor_enabled else 'off'}", file=sys.stderr)
+    print(f"[organism] Background ingestion: {'on' if background_ingestion_enabled else 'off'}", file=sys.stderr)
 
 
 def _run_server(args: argparse.Namespace) -> int:
@@ -25,12 +58,22 @@ def _run_server(args: argparse.Namespace) -> int:
         os.environ["CHIMERA_FRONTIER_PROVIDER"] = args.frontier_provider
     if args.data_dir:
         os.environ["CHIMERA_DATA_DIR"] = args.data_dir
+    selected_port, port_changed = _select_port(args.host, args.port)
+    _print_startup_summary(
+        host=args.host,
+        port=selected_port,
+        model=os.environ["CHIMERA_LOCAL_MODEL"],
+        frontier_provider=os.environ["CHIMERA_FRONTIER_PROVIDER"],
+        supervisor_enabled=os.environ.get("CHIMERA_ENABLE_SUPERVISOR", "0") == "1",
+        background_ingestion_enabled=os.environ.get("CHIMERA_ENABLE_BACKGROUND_INGESTION", "0") == "1",
+        port_changed=port_changed,
+    )
 
     uvicorn.run(
         "chimera_lab.app:create_app",
         factory=True,
         host=args.host,
-        port=args.port,
+        port=selected_port,
         reload=args.reload,
         reload_dirs=["chimera_lab", "skills"] if args.reload else None,
     )
