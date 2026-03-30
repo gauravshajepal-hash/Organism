@@ -37,6 +37,8 @@ class PaperDigestService:
     search_cache_path: Path = field(init=False)
     backoff_path: Path = field(init=False)
     digests_path: Path = field(init=False)
+    _state_lock: threading.RLock = field(init=False)
+    _digest_lock: threading.RLock = field(init=False)
 
     def __post_init__(self) -> None:
         self.root = self.settings.data_dir / "papers"
