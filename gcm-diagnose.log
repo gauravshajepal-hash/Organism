@@ -1,0 +1,186 @@
+﻿Diagnose log at 2026-03-30T12:07:22Z
+
+AppPath: C:\Program Files\Git\mingw64\bin\git-credential-manager.exe
+InstallDir: C:\Program Files\Git\mingw64\bin\
+Version: 2.6.1+786ab03440ddc82e807a97c0e540f5247e44cec6
+
+------------
+Diagnostic: Environment
+Skipped: False
+Success: True
+Exception: None
+Log:
+OSType: Windows
+OSVersion: 10.0 (build 26220)
+Reading environment variables... OK
+ Variables:
+HOMEPATH=\Users\gaura
+DriverData=C:\Windows\System32\Drivers\DriverData
+COMPUTERNAME=GAURAVLAPPY
+GIT_TRACE2_PARENT_SID=ede22b77-4def-46f0-b077-3dd2acc09f8c
+CommonProgramFiles(x86)=C:\Program Files (x86)\Common Files
+ZSH_TMUX_AUTOSTART=false
+OneDrive=C:\Users\gaura\OneDrive
+CODEX_THREAD_ID=019d1f44-6ff4-7950-8cc3-a7c2c1ea8aff
+USERNAME=Gaurav
+CODEX_SHELL=1
+PROCESSOR_REVISION=b701
+PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.CPL
+GIT_EXEC_PATH=C:/Program Files/Git/mingw64/libexec/git-core
+TEMP=C:\Users\gaura\AppData\Local\Temp
+LOCALAPPDATA=C:\Users\gaura\AppData\Local
+MSYSTEM=MINGW64
+TERM=xterm-256color
+GOPATH=C:\Users\gaura\go
+COLORTERM=truecolor
+USERDOMAIN=GauravLappy
+ProgramFiles(x86)=C:\Program Files (x86)
+Path=C:/Program Files/Git/mingw64/libexec/git-core;C:\Program Files\Git\mingw64\bin;C:\Program Files\Git\usr\bin;C:\Users\gaura\bin;C:\Users\gaura\.codex\tmp\arg0\codex-arg0hgABi7;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;C:\Program Files\NVIDIA Corporation\NVIDIA NvDLISR;C:\Program Files\dotnet\;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files\Git\cmd;C:\Program Files\nodejs\;C:\Program Files (x86)\cloudflared\;C:\Program Files\Docker\Docker\resources\bin;C:\Program Files\Go\bin;C:\Users\gaura\.cargo\bin;C:\Users\gaura\.local\bin;C:\Users\gaura\AppData\Local\Programs\Python\Python312\Scripts\;C:\Users\gaura\AppData\Local\Programs\Python\Python312\;C:\Users\gaura\AppData\Local\Programs\Python\Launcher\;C:\Users\gaura\AppData\Local\Microsoft\WindowsApps;C:\Users\gaura\AppData\Local\Programs\Microsoft VS Code\bin;C:\Users\gaura\.dotnet\tools;C:\Users\gaura\AppData\Local\Programs\Antigravity\bin;C:\Users\gaura\AppData\Local\Python\bin;C:\Users\gaura\AppData\Local\Programs\MiKTeX\miktex\bin\x64\;C:\Users\gaura\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.0.1-full_build\bin;C:\Users\gaura\AppData\Local\Microsoft\WinGet\Packages\ChrisBagwell.SoX_Microsoft.Winget.Source_8wekyb3d8bbwe\sox-14.4.2;C:\Users\gaura\AppData\Local\Microsoft\WinGet\Packages\MartinStorsjo.LLVM-MinGW.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\llvm-mingw-20251216-ucrt-x86_64\bin;C:\Users\gaura\AppData\Local\Microsoft\WinGet\Packages\SST.opencode_Microsoft.Winget.Source_8wekyb3d8bbwe;C:\Users\gaura\AppData\Roaming\npm;C:\Users\gaura\AppData\Local\Programs\Ollama;C:\Users\gaura\go\bin;c:\Users\gaura\.goatlas\bin\;C:\Users\gaura\AppData\Local\OpenAI\Codex\bin;C:\Program Files\WindowsApps\OpenAI.Codex_26.325.3894.0_x64__2p2nqsd0c76g0\app\resources
+PROCESSOR_LEVEL=6
+PROCESSOR_IDENTIFIER=Intel64 Family 6 Model 183 Stepping 1, GenuineIntel
+TMPDIR=C:\Users\gaura\AppData\Local\Temp
+ZES_ENABLE_SYSMAN=1
+PSModulePath=C:\Users\gaura\OneDrive\Documents\WindowsPowerShell\Modules;C:\Program Files\WindowsPowerShell\Modules;C:\WINDOWS\system32\WindowsPowerShell\v1.0\Modules
+PUBLIC=C:\Users\Public
+NUMBER_OF_PROCESSORS=32
+ZSH_TMUX_AUTOSTARTED=true
+CommonProgramFiles=C:\Program Files (x86)\Common Files
+TMP=C:\Users\gaura\AppData\Local\Temp
+IGCCSVC_DB=AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAplYsGuOGyk6ksem+l7uKSgQAAAACAAAAAAAQZgAAAAEAACAAAACK4BlmODptp5uPh1KLPL3GtIHvyKqzx66Tew0A69qg7wAAAAAOgAAAAAIAACAAAAAKwpIvzzUblhcpupZeyEucs0Ku1nKidsY+lZXvGNJnYGAAAADEx1F9ZVCEyzHCIUYZL6OBwYXNEnEY7+NfdZuCPwJwAI4eZSdRjcIcmwFQaRcrwHiEUSWthWDiJzGO/pJ9HkwX8EDNOz7vFa7Ok8bW4ILQsYNswgoByXrg7wE8JjUIb2VAAAAAogsEshLbBTaX5KkOzkcct/XZ4oj+02H5jAoicx7RMC/RrAC4I1EHf/rM5BGPyYINJETC/LhKh2t/6mIAQTRXqQ==
+PLINK_PROTOCOL=ssh
+ProgramData=C:\ProgramData
+ProgramW6432=C:\Program Files
+ProgramFiles=C:\Program Files (x86)
+SystemRoot=C:\WINDOWS
+SHELL=C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+HOME=C:\Users\gaura
+LC_CTYPE=C.UTF-8
+CommonProgramW6432=C:\Program Files\Common Files
+DISABLE_AUTO_UPDATE=true
+LOGONSERVER=\\GAURAVLAPPY
+USERPROFILE=C:\Users\gaura
+CODEX_INTERNAL_ORIGINATOR_OVERRIDE=Codex Desktop
+USERDOMAIN_ROAMINGPROFILE=GauravLappy
+APPDATA=C:\Users\gaura\AppData\Roaming
+HOMEDRIVE=C:
+RUST_LOG=warn
+CHROME_CRASHPAD_PIPE_NAME=\\.\pipe\crashpad_48108_SIAMSZCGZEPCSVBF
+PROCESSOR_ARCHITEW6432=AMD64
+PROCESSOR_ARCHITECTURE=x86
+OS=Windows_NT
+ComSpec=C:\WINDOWS\system32\cmd.exe
+SystemDrive=C:
+windir=C:\WINDOWS
+OneDriveConsumer=C:\Users\gaura\OneDrive
+ALLUSERSPROFILE=C:\ProgramData
+
+
+------------
+Diagnostic: File system
+Skipped: False
+Success: True
+Exception: None
+Log:
+Temporary directory is 'C:\Users\gaura\AppData\Local\Temp\'...
+Checking basic file I/O...
+Writing to temporary file 'C:\Users\gaura\AppData\Local\Temp\ec774707b08b575b60fac2a0'... OK
+Reading from temporary file 'C:\Users\gaura\AppData\Local\Temp\ec774707b08b575b60fac2a0'... OK
+Deleting temporary file 'C:\Users\gaura\AppData\Local\Temp\ec774707b08b575b60fac2a0'... OK
+Testing IFileSystem instance...
+UserHomePath: C:\Users\gaura
+UserDataDirectoryPath: C:\Users\gaura\.gcm
+GetCurrentDirectory(): D:\Autoresearch
+
+------------
+Diagnostic: Networking
+Skipped: False
+Success: False
+Exception:
+System.Net.Http.HttpRequestException: An error occurred while sending the request. ---> System.Net.WebException: The remote name could not be resolved: 'example.com'
+   at System.Net.HttpWebRequest.EndGetResponse(IAsyncResult asyncResult)
+   at System.Net.Http.HttpClientHandler.GetResponseCallback(IAsyncResult ar)
+   --- End of inner exception stack trace ---
+   at System.Runtime.CompilerServices.TaskAwaiter.ThrowForNonSuccess(Task task)
+   at System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(Task task)
+   at System.Runtime.CompilerServices.TaskAwaiter`1.GetResult()
+   at GitCredentialManager.Diagnostics.NetworkingDiagnostic.<RunInternalAsync>d__4.MoveNext()
+--- End of stack trace from previous location where exception was thrown ---
+   at System.Runtime.CompilerServices.TaskAwaiter.ThrowForNonSuccess(Task task)
+   at System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(Task task)
+   at System.Runtime.CompilerServices.TaskAwaiter`1.GetResult()
+   at GitCredentialManager.Diagnostics.Diagnostic.<RunAsync>d__6.MoveNext()
+Log:
+Checking networking and HTTP stack...
+Creating HTTP client... OK
+IsNetworkAvailable: True
+Sending HEAD request to http://example.com...Sending HEAD request to https://example.com... warning: HEAD request failed
+Sending HEAD request to http://httpforever.com...
+------------
+Diagnostic: Git
+Skipped: False
+Success: True
+Exception: None
+Log:
+Getting Git version... OK
+Git version is '2.52.0.windows.1'
+Locating current repository...Git repository at 'D:/Autoresearch/.git'
+ OK
+Listing all Git configuration... OK
+Git configuration:
+file:C:/Program Files/Git/etc/gitconfig	diff.astextplain.textconv=astextplain
+file:C:/Program Files/Git/etc/gitconfig	filter.lfs.clean=git-lfs clean -- %f
+file:C:/Program Files/Git/etc/gitconfig	filter.lfs.smudge=git-lfs smudge -- %f
+file:C:/Program Files/Git/etc/gitconfig	filter.lfs.process=git-lfs filter-process
+file:C:/Program Files/Git/etc/gitconfig	filter.lfs.required=true
+file:C:/Program Files/Git/etc/gitconfig	http.sslbackend=schannel
+file:C:/Program Files/Git/etc/gitconfig	core.autocrlf=true
+file:C:/Program Files/Git/etc/gitconfig	core.fscache=true
+file:C:/Program Files/Git/etc/gitconfig	core.symlinks=false
+file:C:/Program Files/Git/etc/gitconfig	pull.rebase=false
+file:C:/Program Files/Git/etc/gitconfig	credential.helper=manager
+file:C:/Program Files/Git/etc/gitconfig	credential.https://dev.azure.com.usehttppath=true
+file:C:/Program Files/Git/etc/gitconfig	init.defaultbranch=master
+file:C:/Users/gaura/.gitconfig	core.editor="C:\Users\gaura\AppData\Local\Programs\Microsoft VS Code\bin\code" --wait
+file:C:/Users/gaura/.gitconfig	user.email=gauravshajepal@gmail.com
+file:C:/Users/gaura/.gitconfig	credential.https://huggingface.co.provider=generic
+file:.git/config	core.repositoryformatversion=0
+file:.git/config	core.filemode=false
+file:.git/config	core.bare=false
+file:.git/config	core.logallrefupdates=true
+file:.git/config	core.symlinks=false
+file:.git/config	core.ignorecase=true
+file:.git/config	remote.origin.url=https://github.com/gauravshajepal-hash/Organism.git
+file:.git/config	remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+file:.git/config	user.name=Chimera Lab
+file:.git/config	user.email=chimera@local.invalid
+file:.git/config	branch.main.remote=origin
+file:.git/config	branch.main.vscode-merge-base=origin/main
+file:.git/config	branch.main.merge=refs/heads/main
+
+
+------------
+Diagnostic: Credential storage
+Skipped: False
+Success: True
+Exception: None
+Log:
+ICredentialStore instance is of type: CredentialStore
+Writing test credential... OK
+Reading test credential... OK
+Deleting test credential... OK
+
+------------
+Diagnostic: Microsoft authentication (AAD/MSA)
+Skipped: False
+Success: True
+Exception: None
+Log:
+Broker is not enabled.
+Flow type is: Auto
+Gathering MSAL token cache data... OK
+CacheDirectory: C:\Users\gaura\AppData\Local\.IdentityService
+CacheFileName: msal.cache
+CacheFilePath: C:\Users\gaura\AppData\Local\.IdentityService\msal.cache
+Creating cache helper... OK
+Verifying MSAL token cache persistence... OK
+
