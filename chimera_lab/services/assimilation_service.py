@@ -28,7 +28,6 @@ class AssimilationService:
                 "source_count": 0,
                 "rewrite_hint": "broaden toward agent memory evaluation benchmark workflow",
                 "missing_terms": tokens[:6],
-                "evidence_scores": [],
             }
             self.artifact_store.create(
                 "source_quality_gate",
@@ -42,7 +41,6 @@ class AssimilationService:
         relevance_scores: list[float] = []
         trust_scores: list[float] = []
         source_types: set[str] = set()
-        evidence_scores: list[float] = []
 
         for candidate in candidates:
             text = self._candidate_text(candidate)
@@ -50,12 +48,9 @@ class AssimilationService:
             token_hits.update(hits)
             overlap = len(hits) / max(1, len(tokens))
             trust = float(candidate.get("trust_score", 0.55))
-            evidence = float(candidate.get("evidence_score", 0.5))
-            self_correl = float(candidate.get("self_corr_confidence", 0.5))
             relevance_scores.append((overlap * 0.75) + (trust * 0.25))
             trust_scores.append(trust)
             source_types.add(str(candidate.get("source_type", "web")))
-            evidence_scores.append((evidence * 0.6) + (self_correl * 0.4))
 
         relevance = round(sum(sorted(relevance_scores, reverse=True)[:5]) / max(1, min(5, len(relevance_scores))), 4)
         grounding = round(
@@ -69,7 +64,6 @@ class AssimilationService:
         confidence = round((relevance * 0.45) + (grounding * 0.35) + (coverage * 0.20), 4)
         missing_terms = [token for token in tokens if token not in token_hits][:6]
 
-        self_corr_penalty = 0.1 if len(evidence_scores) > 0 and min(evidence_scores) < 0.4 else 0.0
         decision = "accept"
         if confidence < 0.44 or relevance < 0.32:
             decision = "rewrite"
@@ -87,7 +81,7 @@ class AssimilationService:
 
         result = {
             "decision": decision,
-            "confidence": confidence - self_corr_penalty,
+            "confidence": confidence,
             "relevance": relevance,
             "grounding": grounding,
             "coverage": coverage,
@@ -95,7 +89,6 @@ class AssimilationService:
             "source_types": sorted(source_types),
             "missing_terms": missing_terms,
             "rewrite_hint": rewrite_hint,
-            "evidence_scores": evidence_scores,
         }
         self.artifact_store.create(
             "source_quality_gate",
