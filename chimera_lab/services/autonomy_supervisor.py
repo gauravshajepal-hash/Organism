@@ -13,6 +13,7 @@ from chimera_lab.db import Storage
 from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.arxiv_scheduler import ArxivScheduler
 from chimera_lab.services.evolution_rollout import EvolutionRolloutManager
+from chimera_lab.services.failure_memory import FailureMemoryService
 from chimera_lab.services.git_safety import GitSafetyService
 from chimera_lab.services.meta_improvement_executor import MetaImprovementExecutor
 from chimera_lab.services.research_evolution import ResearchEvolutionLab
@@ -46,6 +47,7 @@ class AutonomySupervisor:
     arxiv_scheduler: ArxivScheduler
     research_evolution_lab: ResearchEvolutionLab
     meta_improvement_executor: MetaImprovementExecutor
+    failure_memory: FailureMemoryService
     run_executor: RunExecutor
     rollout_manager: EvolutionRolloutManager
     git_safety: GitSafetyService
@@ -128,9 +130,25 @@ class AutonomySupervisor:
 
     def run_once(self) -> dict[str, Any]:
         backlog_compaction = self.compact_backlog()
+        failure_context_refresh = self.failure_memory.supervisor_refresh(self.settings.supervisor_hypothesis_limit)
+        context_source_refs = [
+            str((item.get("payload") or {}).get("run_id"))
+            for item in [*failure_context_refresh["lessons"], *failure_context_refresh["hypotheses"]]
+            if (item.get("payload") or {}).get("run_id")
+        ]
+        self.artifact_store.create(
+            "supervisor_context_refresh",
+            {
+                "lesson_count": len(failure_context_refresh["lessons"]),
+                "hypothesis_count": len(failure_context_refresh["hypotheses"]),
+                "creative_directions": failure_context_refresh["creative_directions"],
+            },
+            source_refs=context_source_refs,
+            created_by="autonomy_supervisor",
+        )
         self._seed_default_objectives()
         self._sync_meta_objectives()
-        self._sync_failure_objectives()
+        self._sync_failure_objectives(failure_context_refresh)
         backup_before = None
         if self.settings.git_backup_on_supervisor_cycle:
             backup_before = self.git_safety.checkpoint_if_needed("supervisor-cycle-pre", push=True)
@@ -145,6 +163,11 @@ class AutonomySupervisor:
         result = {
             "cycle_at": _utc_now_iso(),
             "backlog_compaction": backlog_compaction,
+            "failure_context_refresh": {
+                "lesson_count": len(failure_context_refresh["lessons"]),
+                "hypothesis_count": len(failure_context_refresh["hypotheses"]),
+                "creative_directions": failure_context_refresh["creative_directions"],
+            },
             "arxiv": arxiv,
             "objective_count": len(objectives),
             "parallel_objective_workers": self._objective_workers(len(objectives)),
@@ -207,7 +230,31 @@ class AutonomySupervisor:
                 metadata={"meta_improvement_id": session["id"], "target": session["target"]},
             )
 
-    def _sync_failure_objectives(self) -> None:
+    def _sync_failure_objectives(self, failure_context_refresh: dict[str, Any]) -> None:
+        for artifact in failure_context_refresh.get("hypotheses", [])[: self.settings.supervisor_hypothesis_limit]:
+            payload = artifact.get("payload") or {}
+            artifact_id = str(artifact.get("id") or "")
+            if not artifact_id or self._has_active_objective("next_step_hypothesis_artifact_id", artifact_id):
+                continue
+            if self._has_recent_objective("next_step_hypothesis_artifact_id", artifact_id, timedelta(hours=6)):
+                continue
+            title = f"Try next step for {payload.get('task_type', 'run')}"
+            objective = str(payload.get("next_move") or "Try a narrower next-step hypothesis.")
+            self.storage.enqueue_objective(
+                kind="next_step_hypothesis",
+                title=title,
+                objective=objective,
+                priority="high",
+                metadata={
+                    "next_step_hypothesis_artifact_id": artifact_id,
+                    "failed_run_id": payload.get("run_id"),
+                    "suggested_task_type": payload.get("suggested_task_type"),
+                    "suggested_operator": payload.get("suggested_operator"),
+                    "suggested_command": payload.get("suggested_command"),
+                    "candidate_files": payload.get("candidate_files") or [],
+                    "creative_directions": payload.get("creative_directions") or [],
+                },
+            )
         for run in [item for item in self.storage.list_task_runs()[:20] if item["status"] == "failed"][:3]:
             if self._has_active_objective("failed_run_id", run["id"]):
                 continue
@@ -237,7 +284,7 @@ class AutonomySupervisor:
             backup_before = None
             if self.settings.git_backup_before_objective:
                 backup_before = self.git_safety.checkpoint_if_needed(f"objective-pre-{objective['id']}", push=True)
-            if kind in {"research_ingest", "plan", "repair_failed_run"}:
+            if kind in {"research_ingest", "plan", "repair_failed_run", "next_step_hypothesis"}:
                 result = self._execute_run_objective(objective)
             elif kind == "meta_improvement":
                 session_id = str(metadata["meta_improvement_id"])
@@ -317,19 +364,35 @@ class AutonomySupervisor:
             budget_policy={"time_budget": 300, "token_budget": 6000},
         )
         kind = objective["kind"]
+        metadata = dict(objective.get("metadata") or {})
         task_type = "research_ingest" if kind == "research_ingest" else "plan"
         if kind == "repair_failed_run":
             task_type = "code"
+        elif kind == "next_step_hypothesis":
+            task_type = str(metadata.get("suggested_task_type") or "plan")
+        failure_context = self.failure_memory.build_context(
+            objective["objective"],
+            task_type=task_type,
+            limit=self.settings.failure_memory_context_limit,
+        )
         run = self.storage.create_task_run(
             program_id=program["id"],
             task_type=task_type,
             worker_tier="local_executor" if task_type != "plan" else "frontier_planner",
             instructions=objective["objective"],
             target_path=str(self.settings.git_root) if task_type == "code" else None,
-            command="python -m pytest tests/test_api.py -q" if task_type == "code" else None,
+            command=str(metadata.get("suggested_command") or "python -m pytest tests/test_api.py -q") if task_type == "code" else None,
             time_budget=300,
             token_budget=6000,
-            input_payload={"objective_id": objective["id"], "supervisor_origin": True},
+            input_payload={
+                "objective_id": objective["id"],
+                "supervisor_origin": True,
+                "failure_memory_context": failure_context["items"],
+                "creative_method_hints": failure_context["creative_directions"] or list(metadata.get("creative_directions") or []),
+                "mutation_candidate_files": metadata.get("candidate_files") or [],
+                "suggested_operator": metadata.get("suggested_operator"),
+                "next_step_hypothesis_artifact_id": metadata.get("next_step_hypothesis_artifact_id"),
+            },
         )
         executed = self.run_executor.execute(run["id"])
         return {"mission_id": mission["id"], "program_id": program["id"], "run_id": run["id"], "run_status": executed["status"]}
@@ -395,6 +458,8 @@ class AutonomySupervisor:
 
     def _objective_dedup_key(self, objective: dict[str, Any]) -> str | None:
         metadata = objective.get("metadata") or {}
+        if metadata.get("next_step_hypothesis_artifact_id"):
+            return f"next_step:{metadata['next_step_hypothesis_artifact_id']}"
         if metadata.get("meta_improvement_id"):
             return f"meta_improvement:{metadata['meta_improvement_id']}"
         if metadata.get("failed_run_id"):
@@ -419,6 +484,21 @@ class AutonomySupervisor:
                     status="failed",
                     result_summary="Run was interrupted during supervisor churn and compacted from backlog.",
                 )
+                try:
+                    self.failure_memory.record_run_failure(
+                        run,
+                        failure_reason="Run was interrupted during supervisor churn and compacted from backlog.",
+                        failure_kind="supervisor_compaction_failure",
+                        evidence=["stalled_running_run"],
+                        created_by="autonomy_supervisor",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self.artifact_store.create(
+                        "failure_memory_error",
+                        {"run_id": run["id"], "error": str(exc)},
+                        source_refs=[run["id"]],
+                        created_by="autonomy_supervisor",
+                    )
                 self.artifact_store.create(
                     "run_backlog_compacted",
                     {
@@ -448,6 +528,23 @@ class AutonomySupervisor:
                     status="failed",
                     result_summary="Mutation candidate stalled before evaluation and was compacted from backlog.",
                 )
+                try:
+                    self.failure_memory.record_mutation_failure(
+                        run,
+                        failure_reason="Mutation candidate stalled before evaluation and was compacted from backlog.",
+                        failure_kind="mutation_compaction_failure",
+                        operator=str(payload.get("mutation_operator") or "unknown"),
+                        evidence=["stalled_created_candidate"],
+                        candidate_files=list(payload.get("mutation_candidate_files") or []),
+                        created_by="autonomy_supervisor",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self.artifact_store.create(
+                        "failure_memory_error",
+                        {"candidate_run_id": run["id"], "error": str(exc)},
+                        source_refs=[run["id"]],
+                        created_by="autonomy_supervisor",
+                    )
                 self.artifact_store.create(
                     "mutation_backlog_compacted",
                     {

@@ -7,6 +7,7 @@ import uuid
 
 from chimera_lab.db import Storage
 from chimera_lab.services.artifact_store import ArtifactStore
+from chimera_lab.services.failure_memory import FailureMemoryService
 from chimera_lab.services.mutation_guardrails import MutationGuardrails
 from chimera_lab.services.local_worker import LocalWorker
 from chimera_lab.services.sandbox_runner import SandboxRunner
@@ -14,12 +15,21 @@ from chimera_lab.services.scout_service import canonicalize_source_ref
 
 
 class MutationLab:
-    def __init__(self, storage: Storage, artifact_store: ArtifactStore, local_worker: LocalWorker, sandbox_runner: SandboxRunner, guardrails: MutationGuardrails) -> None:
+    def __init__(
+        self,
+        storage: Storage,
+        artifact_store: ArtifactStore,
+        local_worker: LocalWorker,
+        sandbox_runner: SandboxRunner,
+        guardrails: MutationGuardrails,
+        failure_memory: FailureMemoryService,
+    ) -> None:
         self.storage = storage
         self.artifact_store = artifact_store
         self.local_worker = local_worker
         self.sandbox_runner = sandbox_runner
         self.guardrails = guardrails
+        self.failure_memory = failure_memory
 
     def stage_job(self, run_id: str, strategy: str, iterations: int, auto_stage: bool = True) -> dict:
         base_run = self.storage.get_task_run(run_id)
@@ -197,6 +207,13 @@ class MutationLab:
                 source_refs=[candidate["id"], base_run["id"]],
                 created_by="mutation_lab",
             )
+            self._record_mutation_failure(
+                candidate,
+                operator=operator,
+                failure_kind="mutation_staging_error",
+                failure_reason=f"Mutation staging failed: {exc}",
+                evidence=[str(exc)],
+            )
 
     def _apply_and_evaluate_candidate(self, mission: dict | None, program: dict | None, candidate: dict, base_run: dict, operator: str) -> None:
         target_path = candidate.get("target_path")
@@ -273,6 +290,15 @@ class MutationLab:
                 if apply_errors:
                     summary = f"{summary} No diff blocks applied."
                 self.storage.update_task_run(candidate["id"], status="failed", result_summary=summary[:500])
+                self._record_mutation_failure(
+                    candidate,
+                    operator=operator,
+                    failure_kind="diff_apply_failure",
+                    failure_reason=summary,
+                    evidence=apply_errors,
+                    candidate_files=plan.get("selected_files", []),
+                    source_refs=source_refs,
+                )
                 self._record_source_feedback(source_refs, event="mutation_apply_failed", mutation_failure_count=1, noisy_count=1)
                 return
         preflight_results = self._run_preflight(candidate, plan, applied_edits)
@@ -308,6 +334,19 @@ class MutationLab:
         if failed_preflight is not None:
             summary = f"{plan['summary']} Preflight failed with exit code {failed_preflight['returncode']}."
             self.storage.update_task_run(candidate["id"], status="failed", result_summary=summary[:500])
+            self._record_mutation_failure(
+                candidate,
+                operator=operator,
+                failure_kind="preflight_failure",
+                failure_reason=summary,
+                evidence=[
+                    str(failed_preflight.get("command") or ""),
+                    str(failed_preflight.get("stdout") or ""),
+                    str(failed_preflight.get("stderr") or ""),
+                ],
+                candidate_files=plan.get("selected_files", []),
+                source_refs=source_refs,
+            )
             self._record_source_feedback(
                 source_refs,
                 event="mutation_preflight_failed",
@@ -348,6 +387,19 @@ class MutationLab:
         if command_result and command_result.get("returncode") != 0:
             status = "failed"
             summary = f"Mutation {operator} failed with exit code {command_result['returncode']}."
+            self._record_mutation_failure(
+                candidate,
+                operator=operator,
+                failure_kind="test_failure",
+                failure_reason=summary,
+                evidence=[
+                    str(command_result.get("command") or ""),
+                    str(command_result.get("stdout") or ""),
+                    str(command_result.get("stderr") or ""),
+                ],
+                candidate_files=plan.get("selected_files", []),
+                source_refs=source_refs,
+            )
             self._record_source_feedback(source_refs, event="mutation_failed", mutation_failure_count=1)
         elif verdict["allowed"]:
             status = "ready_for_promotion"
@@ -358,6 +410,41 @@ class MutationLab:
             summary = f"{plan['summary']} Guardrails quarantined this mutation."
             self._record_source_feedback(source_refs, event="mutation_quarantined", mutation_failure_count=1, noisy_count=1)
         self.storage.update_task_run(candidate["id"], status=status, result_summary=summary[:500])
+
+    def _record_mutation_failure(
+        self,
+        candidate: dict,
+        *,
+        operator: str,
+        failure_kind: str,
+        failure_reason: str,
+        evidence: list[str] | None = None,
+        candidate_files: list[str] | None = None,
+        source_refs: list[str] | None = None,
+    ) -> None:
+        try:
+            self.failure_memory.record_mutation_failure(
+                candidate,
+                failure_reason=failure_reason,
+                failure_kind=failure_kind,
+                operator=operator,
+                evidence=evidence or [],
+                candidate_files=list(candidate_files or []),
+                source_refs=list(source_refs or self._mutation_source_refs(candidate)),
+                created_by="mutation_lab",
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.artifact_store.create(
+                "failure_memory_error",
+                {
+                    "candidate_run_id": candidate.get("id"),
+                    "operator": operator,
+                    "failure_kind": failure_kind,
+                    "error": str(exc),
+                },
+                source_refs=[candidate.get("id")] if candidate.get("id") else [],
+                created_by="mutation_lab",
+            )
 
     def _apply_edits(self, worktree: Path, edits: list[dict], allowed_paths: list[str] | None = None) -> tuple[list[dict], list[str]]:
         applied = []

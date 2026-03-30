@@ -6,6 +6,7 @@ from chimera_lab.db import Storage
 from chimera_lab.config import Settings
 from chimera_lab.services.assimilation_service import AssimilationService
 from chimera_lab.services.artifact_store import ArtifactStore
+from chimera_lab.services.failure_memory import FailureMemoryService
 from chimera_lab.services.memory_tiers import MemoryTierOrchestrator
 from chimera_lab.services.research_evolution import ResearchEvolutionLab
 from chimera_lab.services.research_evolution_service import RefereeLoop
@@ -24,6 +25,7 @@ class RunAutomation:
         memory_tiers: MemoryTierOrchestrator,
         research_evolution_lab: ResearchEvolutionLab,
         assimilation_service: AssimilationService,
+        failure_memory: FailureMemoryService,
     ) -> None:
         self.settings = settings
         self.storage = storage
@@ -33,6 +35,7 @@ class RunAutomation:
         self.memory_tiers = memory_tiers
         self.research_evolution_lab = research_evolution_lab
         self.assimilation_service = assimilation_service
+        self.failure_memory = failure_memory
         self.referee_loop = RefereeLoop()
 
     def prepare_run(self, run: dict) -> dict:
@@ -42,6 +45,15 @@ class RunAutomation:
             return run
 
         auto_organs: list[str] = list(payload.get("auto_organs") or [])
+        failure_context = self.failure_memory.build_context(
+            query,
+            task_type=run["task_type"],
+            limit=self.settings.failure_memory_context_limit,
+        )
+        if failure_context["items"]:
+            payload["failure_memory_context"] = failure_context["items"]
+            payload["creative_method_hints"] = failure_context["creative_directions"]
+            auto_organs.append("failure_memory")
 
         if run["task_type"] == "research_ingest":
             scout_query_plan = self.scout_service.build_query_plan(query)
@@ -159,7 +171,8 @@ class RunAutomation:
             auto_organs.append("memory_tiers")
 
         else:
-            return run
+            if not failure_context["items"]:
+                return run
 
         payload["auto_organs"] = sorted({item for item in auto_organs if item})
         updated = self.storage.update_task_run(run["id"], input_payload=payload)

@@ -77,6 +77,7 @@ from chimera_lab.services.autonomy_supervisor import AutonomySupervisor
 from chimera_lab.services.channel_gateway import ChannelGateway
 from chimera_lab.services.company_layer import AutonomousCompany
 from chimera_lab.services.evolution_rollout import EvolutionRolloutManager
+from chimera_lab.services.failure_memory import FailureMemoryService
 from chimera_lab.services.frontier_adapter import FrontierAdapter
 from chimera_lab.services.git_safety import GitSafetyService
 from chimera_lab.services.github_repo_service import GitHubRepoService
@@ -113,6 +114,7 @@ class AppServices:
     analytics_mirror: AnalyticsMirror
     mission_cortex: MissionCortex
     artifact_store: ArtifactStore
+    failure_memory: FailureMemoryService
     memory_service: MemoryService
     memory_tiers: MemoryTierOrchestrator
     scout_service: ScoutService
@@ -163,7 +165,9 @@ def create_app() -> FastAPI:
     frontier_adapter = FrontierAdapter(settings, artifact_store)
     local_worker = LocalWorker(settings, artifact_store, sandbox_runner, skill_registry=skill_registry)
     mutation_guardrails = MutationGuardrails(settings)
+    memory_service = MemoryService(storage)
     memory_tiers = MemoryTierOrchestrator()
+    failure_memory = FailureMemoryService(settings, storage, artifact_store, memory_service, memory_tiers)
     paper_digest_service = PaperDigestService(settings, scout_service, artifact_store, memory_tiers=memory_tiers)
     publication_service = PublicationService(settings, storage, analytics_mirror=analytics_mirror)
     git_safety = GitSafetyService(settings, artifact_store)
@@ -177,6 +181,7 @@ def create_app() -> FastAPI:
         local_worker=local_worker,
         sandbox_runner=sandbox_runner,
         guardrails=mutation_guardrails,
+        failure_memory=failure_memory,
     )
     run_automation = RunAutomation(
         settings,
@@ -187,19 +192,28 @@ def create_app() -> FastAPI:
         memory_tiers=memory_tiers,
         research_evolution_lab=research_evolution_lab,
         assimilation_service=assimilation_service,
+        failure_memory=failure_memory,
     )
     run_executor = RunExecutor(
         storage=storage,
         artifact_store=artifact_store,
         runtime_guard=runtime_guard,
         run_automation=run_automation,
+        failure_memory=failure_memory,
         frontier_adapter=frontier_adapter,
         local_worker=local_worker,
         git_safety=git_safety,
         github_repo_service=github_repo_service,
         git_root=settings.git_root,
     )
-    meta_improvement_executor = MetaImprovementExecutor(settings, storage, artifact_store, research_evolution_lab, mutation_lab=mutation_lab)
+    meta_improvement_executor = MetaImprovementExecutor(
+        settings,
+        storage,
+        artifact_store,
+        research_evolution_lab,
+        mutation_lab=mutation_lab,
+        failure_memory=failure_memory,
+    )
     rollout_manager = EvolutionRolloutManager(
         settings=settings,
         storage=storage,
@@ -215,7 +229,8 @@ def create_app() -> FastAPI:
         analytics_mirror=analytics_mirror,
         mission_cortex=MissionCortex(storage),
         artifact_store=artifact_store,
-        memory_service=MemoryService(storage),
+        failure_memory=failure_memory,
+        memory_service=memory_service,
         memory_tiers=memory_tiers,
         scout_service=scout_service,
         scout_feed_registry=scout_feed_registry,
@@ -245,6 +260,7 @@ def create_app() -> FastAPI:
             arxiv_scheduler=arxiv_scheduler,
             research_evolution_lab=research_evolution_lab,
             meta_improvement_executor=meta_improvement_executor,
+            failure_memory=failure_memory,
             run_executor=run_executor,
             rollout_manager=rollout_manager,
             git_safety=git_safety,

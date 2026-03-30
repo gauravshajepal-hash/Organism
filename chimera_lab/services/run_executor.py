@@ -7,6 +7,7 @@ from typing import Any
 from chimera_lab.db import Storage
 from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.frontier_adapter import FrontierAdapter
+from chimera_lab.services.failure_memory import FailureMemoryService
 from chimera_lab.services.git_safety import GitSafetyService
 from chimera_lab.services.github_repo_service import GitHubRepoService
 from chimera_lab.services.local_worker import LocalWorker
@@ -20,6 +21,7 @@ class RunExecutor:
     artifact_store: ArtifactStore
     runtime_guard: RuntimeGuard
     run_automation: RunAutomation
+    failure_memory: FailureMemoryService
     frontier_adapter: FrontierAdapter
     local_worker: LocalWorker
     git_safety: GitSafetyService
@@ -87,6 +89,22 @@ class RunExecutor:
                 source_refs=[run_id],
                 created_by="run_executor",
             )
+            try:
+                self.failure_memory.record_run_failure(
+                    run,
+                    mission=mission,
+                    program=program,
+                    failure_reason=str(exc),
+                    evidence=[str(run.get("instructions") or ""), str(run.get("command") or "")],
+                    created_by="run_executor",
+                )
+            except Exception as lesson_exc:  # noqa: BLE001
+                self.artifact_store.create(
+                    "failure_memory_error",
+                    {"run_id": run_id, "error": str(lesson_exc)},
+                    source_refs=[run_id],
+                    created_by="run_executor",
+                )
             self.runtime_guard.record_exception(
                 "run_start",
                 str(exc),

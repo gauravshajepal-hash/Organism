@@ -102,6 +102,50 @@ def test_supervisor_executes_objectives_in_parallel(tmp_path: Path) -> None:
     client.close()
 
 
+def test_supervisor_turns_next_step_hypothesis_into_objective(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    services = client.app.state.services
+    services.settings.supervisor_default_objectives = []
+    services.settings.supervisor_objective_limit = 5
+
+    mission = services.storage.create_mission("Failure memory", "Capture a failed repair", "high")
+    program = services.storage.create_program(mission["id"], "Capture a failed repair", ["Write explicit next step"], {"time_budget": 300})
+    run = services.storage.create_task_run(
+        program_id=program["id"],
+        task_type="code",
+        worker_tier="local_executor",
+        instructions="Repair the ranking gate.",
+        target_path=str(tmp_path),
+        command="python -m pytest tests/test_api.py -q",
+        time_budget=300,
+        token_budget=6000,
+        input_payload={},
+    )
+    failed_run = services.storage.update_task_run(run["id"], status="failed", result_summary="No diff blocks applied.")
+    services.failure_memory.record_run_failure(
+        failed_run,
+        mission=mission,
+        program=program,
+        failure_reason="No diff blocks applied.",
+        failure_kind="diff_apply_failure",
+        evidence=["SEARCH block not found"],
+    )
+
+    with (
+        patch.object(type(services.arxiv_scheduler), "run_once", return_value={"status": "ok", "force": False}),
+        patch.object(type(services.git_safety), "checkpoint_if_needed", return_value={"status": "clean_noop"}),
+        patch.object(type(services.rollout_manager), "attempt_auto_promotions", return_value=[]),
+        patch.object(type(services.rollout_manager), "run_rollout_canaries", return_value=[]),
+        patch.object(type(services.run_executor), "execute", return_value={"status": "completed"}),
+    ):
+        response = client.post("/ops/supervisor/run-once")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["failure_context_refresh"]["hypothesis_count"] >= 1
+    assert any(item["kind"] == "next_step_hypothesis" for item in payload["executions"])
+
+
 def test_supervisor_compacts_stale_backlog(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     services = client.app.state.services

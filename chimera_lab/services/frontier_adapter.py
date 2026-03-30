@@ -57,6 +57,10 @@ class FrontierAdapter:
             organ_lines.append(f"Referee verdict: {payload['referee_verdict']}")
         if payload.get("memory_context"):
             organ_lines.append(f"Memory context: {payload['memory_context'][:3]}")
+        if payload.get("failure_memory_context"):
+            organ_lines.append(f"Failure memory: {payload['failure_memory_context'][:3]}")
+        if payload.get("creative_method_hints"):
+            organ_lines.append(f"Creative method hints: {payload['creative_method_hints'][:6]}")
         if payload.get("live_sources"):
             organ_lines.append(f"Live sources: {payload['live_sources'][:6]}")
         if payload.get("scout_query_plan"):

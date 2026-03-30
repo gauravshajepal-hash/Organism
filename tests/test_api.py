@@ -73,6 +73,46 @@ def test_local_run_flow(tmp_path: Path) -> None:
     assert "sandbox_execution" in run_artifact_types
 
 
+def test_failed_run_writes_failure_lesson_and_next_step_hypothesis(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    _, program_id = create_seed_objects(client)
+    workspace = tmp_path / "failed_workspace"
+    workspace.mkdir()
+    (workspace / "hello.txt").write_text("hello", encoding="utf-8")
+
+    run = client.post(
+        f"/programs/{program_id}/runs",
+        json={
+            "task_type": "code",
+            "instructions": "Try a repair that will fail hard.",
+            "target_path": str(workspace),
+            "command": "python -c \"print('ok')\"",
+        },
+    ).json()
+
+    with patch.object(LocalWorker, "execute", side_effect=RuntimeError("local worker exploded during repair")):
+        started = client.post(f"/runs/{run['id']}/start")
+
+    assert started.status_code == 200
+    payload = started.json()
+    assert payload["status"] == "failed"
+
+    run_artifacts = client.get(f"/runs/{run['id']}/artifacts").json()
+    artifact_types = {item["type"] for item in run_artifacts}
+    assert "run_error" in artifact_types
+    assert "failure_lesson" in artifact_types
+    assert "next_step_hypothesis" in artifact_types
+
+    tier_search = client.post(
+        "/memory/tiers/search",
+        json={"query": "local worker exploded repair", "limit": 10},
+    )
+    assert tier_search.status_code == 200
+    records = tier_search.json()
+    assert any("failure_lesson" in item["tags"] for item in records)
+    assert any("next_step_hypothesis" in item["tags"] for item in records)
+
+
 def test_code_run_takes_git_savepoint_before_repo_modification(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -959,6 +999,63 @@ def answer() -> int:
     repair_artifacts = [item for item in artifacts if item["type"] == "mutation_apply_repair" and candidate_id in item["source_refs"]]
     assert repair_artifacts
     assert repair_artifacts[0]["payload"]["applied_edits"]
+
+
+def test_failed_mutation_writes_failure_lesson_and_next_step_hypothesis(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    _, program_id = create_seed_objects(client)
+
+    workspace = tmp_path / "failed_mutation_workspace"
+    (workspace / "app").mkdir(parents=True)
+    (workspace / "tests").mkdir(parents=True)
+    (workspace / "app" / "logic.py").write_text("def answer() -> int:\n    return 0\n", encoding="utf-8")
+    (workspace / "tests" / "test_logic.py").write_text(
+        "from app.logic import answer\n\n\ndef test_answer() -> None:\n    assert answer() == 42\n",
+        encoding="utf-8",
+    )
+    (workspace / "app" / "__init__.py").write_text("", encoding="utf-8")
+
+    base_run = client.post(
+        f"/programs/{program_id}/runs",
+        json={
+            "task_type": "code",
+            "instructions": "Base mutation run for failure-memory capture.",
+            "command": "python -m pytest tests/test_logic.py -q",
+            "target_path": str(workspace),
+        },
+    ).json()
+    client.post(f"/runs/{base_run['id']}/start")
+
+    broken_response = """
+<<<SUMMARY>>>
+Apply a broken patch that should fail preflight.
+<<<END SUMMARY>>>
+<<<FILE:app/logic.py>>>
+<<<<<<< SEARCH
+def answer() -> int:
+    return 0
+=======
+def answer() -> int
+    return 42
+>>>>>>> REPLACE
+<<<END FILE>>>
+""".strip()
+
+    with patch.object(LocalWorker, "_invoke_model", autospec=True, return_value=broken_response):
+        mutation = client.post(
+            "/mutation/jobs",
+            json={"run_id": base_run["id"], "strategy": "repair", "iterations": 1, "auto_stage": True},
+        )
+    assert mutation.status_code == 200
+    candidate_id = mutation.json()["candidate_run_ids"][0]
+    candidate = client.get(f"/runs/{candidate_id}").json()
+    assert candidate["status"] == "failed"
+
+    artifacts = client.get(f"/runs/{candidate_id}/artifacts").json()
+    artifact_types = {item["type"] for item in artifacts}
+    assert "mutation_preflight" in artifact_types
+    assert "failure_lesson" in artifact_types
+    assert "next_step_hypothesis" in artifact_types
 
 
 def test_mutation_success_and_promotion_update_source_feedback(tmp_path: Path) -> None:

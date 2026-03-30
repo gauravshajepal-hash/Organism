@@ -640,6 +640,10 @@ class LocalWorker:
             sections.append(f"Referee verdict: {json.dumps(payload['referee_verdict'], ensure_ascii=True)}")
         if payload.get("memory_context"):
             sections.append(f"Memory context: {json.dumps(payload['memory_context'][:3], ensure_ascii=True)}")
+        if payload.get("failure_memory_context"):
+            sections.append(f"Failure memory: {json.dumps(payload['failure_memory_context'][:3], ensure_ascii=True)}")
+        if payload.get("creative_method_hints"):
+            sections.append(f"Creative method hints: {json.dumps(payload['creative_method_hints'][:6], ensure_ascii=True)}")
         return "\n".join(sections) if sections else "No additional organ context."
 
     def _source_trace_requirement(self, payload: dict[str, Any]) -> str:

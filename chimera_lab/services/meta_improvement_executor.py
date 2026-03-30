@@ -8,6 +8,7 @@ from typing import Any
 from chimera_lab.config import Settings
 from chimera_lab.db import Storage
 from chimera_lab.services.artifact_store import ArtifactStore
+from chimera_lab.services.failure_memory import FailureMemoryService
 from chimera_lab.services.mutation_lab import MutationLab
 from chimera_lab.services.research_evolution import ResearchEvolutionLab
 from chimera_lab.services.scout_service import canonicalize_source_ref
@@ -20,6 +21,7 @@ class MetaImprovementExecutor:
     artifact_store: ArtifactStore
     research_evolution_lab: ResearchEvolutionLab
     mutation_lab: MutationLab
+    failure_memory: FailureMemoryService
 
     def execute(self, session_id: str, auto_stage: bool = True, iterations: int = 1) -> dict[str, Any]:
         session = self.research_evolution_lab.get_meta_improvement(session_id)
@@ -95,6 +97,23 @@ class MetaImprovementExecutor:
                 status="failed",
                 result_summary=f"Meta improvement staging failed: {exc}"[:500],
             )
+            try:
+                self.failure_memory.record_run_failure(
+                    failed,
+                    mission=mission,
+                    program=program,
+                    failure_reason=f"Meta improvement staging failed: {exc}",
+                    failure_kind="meta_improvement_staging_failure",
+                    evidence=[session["objective"], session["target"]],
+                    created_by="meta_improvement_executor",
+                )
+            except Exception as lesson_exc:  # noqa: BLE001
+                self.artifact_store.create(
+                    "failure_memory_error",
+                    {"run_id": failed["id"], "error": str(lesson_exc)},
+                    source_refs=[failed["id"], session_id],
+                    created_by="meta_improvement_executor",
+                )
             execution["base_run_status"] = failed["status"]
             execution["status"] = "failed"
             execution["error"] = str(exc)
