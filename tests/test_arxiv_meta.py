@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -182,8 +184,20 @@ def test_paper_digest_scheduler_snapshot_tolerates_legacy_backoff_shape(tmp_path
     client = make_client(tmp_path)
     backoff_path = tmp_path / "data" / "papers" / "arxiv_backoff.json"
     backoff_path.parent.mkdir(parents=True, exist_ok=True)
+    future_backoff = int(time.time()) + 3600
     backoff_path.write_text(
-        '{"consecutive_failures": 6, "backoff_until": 1774825330, "last_error": "legacy", "abc123": {"consecutive_failures": 1, "backoff_until": 1774825330, "last_error": "429"}}',
+        json.dumps(
+            {
+                "consecutive_failures": 6,
+                "backoff_until": future_backoff,
+                "last_error": "legacy",
+                "abc123": {
+                    "consecutive_failures": 1,
+                    "backoff_until": future_backoff,
+                    "last_error": "429",
+                },
+            }
+        ),
         encoding="utf-8",
     )
 
