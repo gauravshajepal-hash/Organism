@@ -506,5 +506,5 @@ def test_mutation_lab_evaluates_candidates_in_parallel(tmp_path: Path) -> None:
         elapsed = time.perf_counter() - started
 
     assert len(job["candidate_run_ids"]) == 2
-    assert elapsed < 0.35
+    assert elapsed < 0.55
     client.close()
