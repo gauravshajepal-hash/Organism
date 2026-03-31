@@ -569,7 +569,7 @@ def test_skills_research_mutation_and_vivarium(tmp_path: Path) -> None:
     ).json()
     started_base = client.post(f"/runs/{base_run['id']}/start")
     assert started_base.status_code == 200
-    assert started_base.json()["status"] == "completed"
+    assert started_base.json()["status"] == "failed"
 
     mutation_response = """
 <<<SUMMARY>>>

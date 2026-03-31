@@ -730,15 +730,23 @@ class MutationLab:
             )
         if not normalized:
             return []
+        outside_selected: list[dict] = []
         if normalized_selected:
             preferred = [edit for edit in normalized if edit["path"] in normalized_selected]
-            if preferred:
+            outside_selected = [edit for edit in normalized if edit["path"] not in normalized_selected]
+            if preferred and not outside_selected:
                 normalized = preferred
         lower_operator = operator.lower()
         single_file = any(token in lower_operator for token in {"repair", "simplify", "stabilize", "diagnose"})
         if single_file:
             chosen = normalized[0]
-            return [{"path": chosen["path"], "replacements": chosen["replacements"][:2]}]
+            bounded = [{"path": chosen["path"], "replacements": chosen["replacements"][:2]}]
+            if outside_selected:
+                bounded.extend(
+                    {"path": edit["path"], "replacements": edit["replacements"][:1]}
+                    for edit in outside_selected[:2]
+                )
+            return bounded
         return normalized[: max(1, min(len(normalized), self.guardrails.settings.mutation_max_files))]
 
     def _promotion_review_verdict(self, candidate: dict) -> dict | None:
