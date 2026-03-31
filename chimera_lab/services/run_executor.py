@@ -70,13 +70,27 @@ class RunExecutor:
                     "run_id": run_id,
                     "summary": result["summary"],
                     "artifacts": result["artifacts"],
+                    "command_result": result.get("command_result"),
+                    "command_passed": self._command_passed(result.get("command_result")),
                 },
                 source_refs=[run_id],
                 created_by="local_worker",
             )
+            status = "completed"
+            if not self._command_passed(result.get("command_result")):
+                status = "failed"
+                self.failure_memory.record_run_failure(
+                    run,
+                    mission=mission,
+                    program=program,
+                    failure_reason=result["summary"],
+                    failure_kind="test_failure",
+                    evidence=self._command_evidence(result.get("command_result")),
+                    created_by="run_executor",
+                )
             updated = self.storage.update_task_run(
                 run_id,
-                status="completed",
+                status=status,
                 result_summary=result["summary"],
             )
             self.run_automation.post_run(updated)
@@ -140,3 +154,17 @@ class RunExecutor:
             return False
         target = Path(str(run.get("target_path") or self.git_root)).resolve()
         return target == self.git_root.resolve() or self.git_root.resolve() in target.parents
+
+    def _command_passed(self, command_result: dict[str, Any] | None) -> bool:
+        if command_result is None:
+            return True
+        return int(command_result.get("returncode", 1)) == 0
+
+    def _command_evidence(self, command_result: dict[str, Any] | None) -> list[str]:
+        if command_result is None:
+            return []
+        return [
+            str(command_result.get("command") or ""),
+            str(command_result.get("stdout") or ""),
+            str(command_result.get("stderr") or ""),
+        ]

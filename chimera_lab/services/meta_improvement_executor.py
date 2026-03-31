@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -189,46 +190,146 @@ class MetaImprovementExecutor:
         winner = session.get("winner") or {}
         proposal = str(winner.get("proposal") or objective)
         strategy = "repair"
-
+        candidate_files = self._candidate_files_for_session(session)
+        test_files = self._test_files_for_candidates(candidate_files)
         if target == "scout_service":
-            return {
-                "strategy": strategy,
-                "candidate_files": [
-                    "chimera_lab/services/assimilation_service.py",
-                    "chimera_lab/services/run_automation.py",
-                    "tests/test_assimilation_service.py",
-                ],
-                "command": "python -m pytest tests/test_assimilation_service.py tests/test_api.py -q",
-                "retry_commands": ["python -m compileall chimera_lab"],
-                "instructions": f"Apply a narrow reliability upgrade for scout ingestion. Objective: {objective}. Winning proposal: {proposal}. Keep changes focused on source quality gates, scout rewrite hints, or evidence scoring.",
-            }
-        if target == "run_automation":
-            return {
-                "strategy": strategy,
-                "candidate_files": [
-                    "chimera_lab/services/run_automation.py",
-                    "chimera_lab/services/assimilation_service.py",
-                    "tests/test_api.py",
-                ],
-                "command": "python -m pytest tests/test_api.py tests/test_assimilation_service.py -q",
-                "retry_commands": ["python -m compileall chimera_lab"],
-                "instructions": f"Apply a narrow workflow-gate upgrade. Objective: {objective}. Winning proposal: {proposal}. Keep changes focused on quality thresholds, bounded retries, or evidence-aware gating.",
-            }
-        if target == "research_evolution_lab":
-            return {
-                "strategy": "explore",
-                "candidate_files": [
-                    "chimera_lab/services/research_evolution.py",
-                    "tests/test_api.py",
-                ],
-                "command": "python -m pytest tests/test_api.py -q",
-                "retry_commands": ["python -m compileall chimera_lab"],
-                "instructions": f"Apply a narrow benchmark-oriented improvement. Objective: {objective}. Winning proposal: {proposal}. Keep the change focused on evaluation rigor, not broad orchestration changes.",
-            }
+            instructions = (
+                f"Apply a narrow reliability upgrade for scout ingestion. Objective: {objective}. "
+                f"Winning proposal: {proposal}. Keep changes focused on source quality gates, scout rewrite hints, "
+                "evidence scoring, or query selection. Avoid touching unrelated orchestration."
+            )
+        elif target == "run_automation":
+            instructions = (
+                f"Apply a narrow workflow-gate upgrade. Objective: {objective}. Winning proposal: {proposal}. "
+                "Keep changes focused on discovery budgeting, bounded retries, or evidence-aware gating."
+            )
+        elif target == "research_evolution_lab":
+            strategy = "explore"
+            instructions = (
+                f"Apply a narrow benchmark-oriented improvement. Objective: {objective}. Winning proposal: {proposal}. "
+                "Keep the change focused on evaluation rigor, search diversification, or small planning heuristics."
+            )
+        else:
+            instructions = f"Apply a narrow self-improvement based on: {proposal}"
         return {
             "strategy": strategy,
-            "candidate_files": ["chimera_lab/services/run_automation.py", "tests/test_api.py"],
-            "command": "python -m pytest tests/test_api.py -q",
+            "candidate_files": candidate_files,
+            "command": self._command_for_tests(test_files),
             "retry_commands": ["python -m compileall chimera_lab"],
-            "instructions": f"Apply a narrow self-improvement based on: {proposal}",
+            "instructions": instructions,
         }
+
+    def _candidate_files_for_session(self, session: dict[str, Any]) -> list[str]:
+        target = str(session.get("target") or "").strip().lower()
+        source_refs = [str(item) for item in (session.get("source_refs") or []) if str(item).strip()]
+        objective_text = " ".join(
+            [
+                str(session.get("objective") or ""),
+                str((session.get("winner") or {}).get("proposal") or ""),
+                " ".join(source_refs),
+            ]
+        ).lower()
+        blueprints = self._plan_blueprints()
+        families = blueprints.get(target, blueprints["default"])
+        index = self._rotation_index(f"{session.get('id', '')}:{target}:{objective_text}", len(families))
+        rotated = families[index:] + families[:index]
+        for family in rotated:
+            if self._family_matches(family, objective_text):
+                return list(family["files"])
+        return list(rotated[0]["files"])
+
+    def _plan_blueprints(self) -> dict[str, list[dict[str, Any]]]:
+        return {
+            "scout_service": [
+                {
+                    "files": [
+                        "chimera_lab/services/scout_service.py",
+                        "chimera_lab/services/assimilation_service.py",
+                        "tests/test_api.py",
+                    ],
+                    "keywords": ["scout", "ranking", "source", "query", "evidence"],
+                },
+                {
+                    "files": [
+                        "chimera_lab/services/paper_digest_service.py",
+                        "chimera_lab/services/arxiv_scheduler.py",
+                        "tests/test_arxiv_meta.py",
+                    ],
+                    "keywords": ["paper", "arxiv", "digest", "cache", "discover"],
+                },
+            ],
+            "run_automation": [
+                {
+                    "files": [
+                        "chimera_lab/services/run_automation.py",
+                        "chimera_lab/services/assimilation_service.py",
+                        "tests/test_api.py",
+                    ],
+                    "keywords": ["workflow", "automation", "gate", "assimilation", "quality"],
+                },
+                {
+                    "files": [
+                        "chimera_lab/services/run_automation.py",
+                        "chimera_lab/services/failure_memory.py",
+                        "tests/test_supervisor_autonomy.py",
+                    ],
+                    "keywords": ["failure", "memory", "hypothesis", "retry", "context"],
+                },
+                {
+                    "files": [
+                        "chimera_lab/services/run_automation.py",
+                        "chimera_lab/services/scout_service.py",
+                        "tests/test_api.py",
+                    ],
+                    "keywords": ["discover", "research", "scout", "source", "query"],
+                },
+            ],
+            "research_evolution_lab": [
+                {
+                    "files": [
+                        "chimera_lab/services/research_evolution.py",
+                        "chimera_lab/services/meta_improvement_executor.py",
+                        "tests/test_api.py",
+                    ],
+                    "keywords": ["tree", "search", "evaluation", "benchmark", "explore"],
+                }
+            ],
+            "default": [
+                {
+                    "files": [
+                        "chimera_lab/services/assimilation_service.py",
+                        "chimera_lab/services/run_automation.py",
+                        "tests/test_assimilation_service.py",
+                    ],
+                    "keywords": ["assimilation", "source", "gate", "quality"],
+                },
+                {
+                    "files": [
+                        "chimera_lab/services/scout_service.py",
+                        "chimera_lab/services/paper_digest_service.py",
+                        "tests/test_arxiv_meta.py",
+                    ],
+                    "keywords": ["scout", "paper", "query", "discover"],
+                },
+            ],
+        }
+
+    def _rotation_index(self, seed: str, count: int) -> int:
+        if count <= 1:
+            return 0
+        digest = hashlib.sha1(seed.encode("utf-8", errors="ignore")).hexdigest()
+        return int(digest[:8], 16) % count
+
+    def _family_matches(self, family: dict[str, Any], objective_text: str) -> bool:
+        keywords = [str(item).lower() for item in family.get("keywords", [])]
+        return bool(keywords and any(keyword in objective_text for keyword in keywords))
+
+    def _test_files_for_candidates(self, candidate_files: list[str]) -> list[str]:
+        tests = [path for path in candidate_files if path.startswith("tests/")]
+        if tests:
+            return tests
+        return ["tests/test_api.py"]
+
+    def _command_for_tests(self, test_files: list[str]) -> str:
+        joined = " ".join(test_files[:3])
+        return f"python -m pytest {joined} -q"

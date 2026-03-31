@@ -149,11 +149,12 @@ class AutonomySupervisor:
         self._seed_default_objectives()
         self._sync_meta_objectives()
         self._sync_failure_objectives(failure_context_refresh)
+        self._ensure_research_ingest_budget(failure_context_refresh)
         backup_before = None
         if self.settings.git_backup_on_supervisor_cycle:
             backup_before = self.git_safety.checkpoint_if_needed("supervisor-cycle-pre", push=True)
         arxiv = self.arxiv_scheduler.run_once(force=False)
-        objectives = self.storage.next_due_objectives(limit=self.settings.supervisor_objective_limit)
+        objectives = self._select_objectives_for_cycle()
         executions = self._execute_objectives(objectives)
         auto_promotions = self.rollout_manager.attempt_auto_promotions(limit=2)
         canaries = self.rollout_manager.run_rollout_canaries(limit=4)
@@ -222,12 +223,18 @@ class AutonomySupervisor:
         for session in self._pending_meta_sessions():
             if self._has_active_objective("meta_improvement_id", session["id"]):
                 continue
+            target = str(session["target"])
+            cooldown = timedelta(minutes=max(5, self.settings.supervisor_meta_target_cooldown_minutes))
+            if self._has_active_objective("meta_target", target):
+                continue
+            if self._has_recent_objective("meta_target", target, cooldown):
+                continue
             self.storage.enqueue_objective(
                 kind="meta_improvement",
                 title=f"Execute meta improvement {session['target']}",
                 objective=session["objective"],
                 priority="high",
-                metadata={"meta_improvement_id": session["id"], "target": session["target"]},
+                metadata={"meta_improvement_id": session["id"], "target": session["target"], "meta_target": session["target"]},
             )
 
     def _sync_failure_objectives(self, failure_context_refresh: dict[str, Any]) -> None:
@@ -395,7 +402,107 @@ class AutonomySupervisor:
             },
         )
         executed = self.run_executor.execute(run["id"])
+        if task_type == "code" and executed["status"] == "failed":
+            raise RuntimeError(f"objective_run_failed:{run['id']}")
         return {"mission_id": mission["id"], "program_id": program["id"], "run_id": run["id"], "run_status": executed["status"]}
+
+    def _select_objectives_for_cycle(self) -> list[dict[str, Any]]:
+        due = self._due_objectives()
+        if not due:
+            return []
+        limit = max(1, self.settings.supervisor_objective_limit)
+        selected = due[:limit]
+        research_slots = max(0, min(self.settings.supervisor_research_slots_per_cycle, limit))
+        if research_slots <= 0:
+            return selected
+        research_due = [item for item in due if item["kind"] == "research_ingest"]
+        if not research_due:
+            return selected
+        selected_ids = {item["id"] for item in selected}
+        chosen_research = [item for item in selected if item["kind"] == "research_ingest"][:research_slots]
+        for item in research_due:
+            if len(chosen_research) >= research_slots:
+                break
+            if item["id"] not in selected_ids:
+                chosen_research.append(item)
+        if len(chosen_research) >= research_slots:
+            non_research = [item for item in selected if item["kind"] != "research_ingest"]
+            selected = chosen_research + non_research
+            selected = selected[:limit]
+        ordered = {item["id"]: item for item in selected}
+        return [ordered[item["id"]] for item in due if item["id"] in ordered][:limit]
+
+    def _due_objectives(self) -> list[dict[str, Any]]:
+        now = _utc_now_iso()
+        candidates = [
+            item
+            for item in self.storage.list_objectives(status="pending")
+            if not item.get("next_run_after") or str(item["next_run_after"]) <= now
+        ]
+        priority_order = {"critical": 0, "high": 1, "normal": 2, "low": 3}
+        candidates.sort(key=lambda item: (priority_order.get(str(item.get("priority", "normal")).lower(), 9), item["created_at"]))
+        return candidates
+
+    def _ensure_research_ingest_budget(self, failure_context_refresh: dict[str, Any]) -> None:
+        now = _utc_now_iso()
+        active = [
+            item
+            for item in self.storage.list_objectives()
+            if item["kind"] == "research_ingest"
+            and (
+                item["status"] == "running"
+                or (item["status"] == "pending" and (not item.get("next_run_after") or str(item["next_run_after"]) <= now))
+            )
+        ]
+        needed = max(0, self.settings.supervisor_min_research_objectives - len(active))
+        if needed <= 0:
+            return
+        for query in self._research_ingest_briefs(failure_context_refresh)[:needed]:
+            if self._has_active_objective("source_discovery_query", query):
+                continue
+            if self._has_recent_objective("source_discovery_query", query, timedelta(hours=4)):
+                continue
+            self.storage.enqueue_objective(
+                kind="research_ingest",
+                title="Discovery sweep",
+                objective=query,
+                priority="high",
+                metadata={"source_discovery_query": query, "recurring": True, "interval_minutes": 240},
+            )
+
+    def _research_ingest_briefs(self, failure_context_refresh: dict[str, Any]) -> list[str]:
+        queries: list[str] = []
+        defaults = [item for item in self.settings.supervisor_default_objectives if item.strip()]
+        for objective in defaults:
+            self._append_research_brief(queries, objective)
+        for artifact in failure_context_refresh.get("hypotheses", []):
+            payload = artifact.get("payload") or {}
+            candidate_files = ", ".join((payload.get("candidate_files") or [])[:2])
+            creative = ", ".join((payload.get("creative_directions") or [])[:3])
+            next_move = str(payload.get("next_move") or "").strip()
+            if next_move:
+                brief = (
+                    "Discover fresh upstream work that could help with this next-step hypothesis: "
+                    f"{next_move}. Candidate files: {candidate_files or 'unknown'}. "
+                    f"Creative directions: {creative or 'none'}."
+                )
+                self._append_research_brief(queries, brief)
+        for objective in self.storage.list_objectives()[:20]:
+            if objective.get("kind") not in {"meta_improvement", "plan", "next_step_hypothesis"}:
+                continue
+            brief = (
+                "Discover fresh upstream work relevant to this active objective: "
+                f"{objective['objective']}"
+            )
+            self._append_research_brief(queries, brief)
+        return queries
+
+    def _append_research_brief(self, queries: list[str], value: str) -> None:
+        query = " ".join(str(value or "").split()).strip()
+        if len(query) < 20:
+            return
+        if query not in queries:
+            queries.append(query)
 
     def _compact_backlog(self) -> dict[str, Any]:
         stale_requeued = self._recover_stale_running_objectives()

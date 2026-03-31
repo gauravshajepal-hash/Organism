@@ -103,6 +103,52 @@ def test_supervisor_executes_objectives_in_parallel(tmp_path: Path) -> None:
     client.close()
 
 
+def test_supervisor_reserves_research_ingest_slot_and_seeds_discovery_budget(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    services = client.app.state.services
+    services.settings.supervisor_default_objectives = []
+    services.settings.supervisor_objective_limit = 2
+    services.settings.supervisor_research_slots_per_cycle = 1
+    services.settings.supervisor_min_research_objectives = 1
+
+    services.storage.enqueue_objective(
+        kind="meta_improvement",
+        title="Meta one",
+        objective="Tighten mutation gates",
+        priority="high",
+        metadata={"meta_improvement_id": "meta_1", "meta_target": "run_automation"},
+    )
+    services.storage.enqueue_objective(
+        kind="next_step_hypothesis",
+        title="Hypothesis one",
+        objective="Try a narrower patch",
+        priority="high",
+        metadata={"next_step_hypothesis_artifact_id": "artifact_h1"},
+    )
+
+    services.autonomy_supervisor._ensure_research_ingest_budget(  # noqa: SLF001
+        {
+            "lessons": [],
+            "hypotheses": [
+                {
+                    "id": "artifact_h2",
+                    "payload": {
+                        "next_move": "Discover fresh upstream work for scout ranking and mutation localization.",
+                        "candidate_files": ["chimera_lab/services/scout_service.py"],
+                        "creative_directions": ["cross-domain ranking ideas"],
+                    },
+                }
+            ],
+            "creative_directions": ["cross-domain ranking ideas"],
+        }
+    )
+
+    selected = services.autonomy_supervisor._select_objectives_for_cycle()  # noqa: SLF001
+    assert len(selected) == 2
+    assert any(item["kind"] == "research_ingest" for item in selected)
+    assert any(item["kind"] == "research_ingest" for item in services.storage.list_objectives(status="pending"))
+
+
 def test_supervisor_turns_next_step_hypothesis_into_objective(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     services = client.app.state.services
@@ -145,6 +191,33 @@ def test_supervisor_turns_next_step_hypothesis_into_objective(tmp_path: Path) ->
     payload = response.json()
     assert payload["failure_context_refresh"]["hypothesis_count"] >= 1
     assert any(item["kind"] == "next_step_hypothesis" for item in payload["executions"])
+
+
+def test_arxiv_scheduler_queries_include_objectives_and_failure_hypotheses(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    services = client.app.state.services
+
+    services.storage.enqueue_objective(
+        kind="research_ingest",
+        title="Discovery",
+        objective="Discover fresh active-matter ideas for memory and attention alternatives.",
+        priority="high",
+        metadata={"source_discovery_query": "Discover active matter memory architectures for agent systems."},
+    )
+    services.artifact_store.create(
+        "next_step_hypothesis",
+        {
+            "run_id": "run_x",
+            "task_type": "code",
+            "next_move": "Find new papers on statistical physics and collective behavior for memory routing.",
+        },
+        source_refs=["run_x"],
+        created_by="test",
+    )
+
+    queries = services.arxiv_scheduler._queries()  # noqa: SLF001
+    assert any("active matter" in query.lower() for query in queries)
+    assert any("statistical physics" in query.lower() for query in queries)
 
 
 def test_supervisor_compacts_stale_backlog(tmp_path: Path) -> None:
@@ -242,6 +315,26 @@ def test_supervisor_compacts_stale_backlog(tmp_path: Path) -> None:
     assert services.storage.get_task_run(base_run["id"])["status"] == "staged_for_mutation"
     assert services.storage.get_task_run(stalled_candidate["id"])["status"] == "failed"
     assert services.storage.get_task_run(stale_running_run["id"])["status"] == "failed"
+
+
+def test_sandbox_worktree_ignores_live_data_and_analytics_state(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    services = client.app.state.services
+    repo = tmp_path / "repo"
+    (repo / "chimera_lab").mkdir(parents=True)
+    (repo / "chimera_lab" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "data" / "analytics").mkdir(parents=True)
+    (repo / "data" / "chimera.db").write_text("sqlite", encoding="utf-8")
+    (repo / "data" / "chimera.db-wal").write_text("wal", encoding="utf-8")
+    (repo / "data" / "analytics" / "analytics.duckdb").write_text("duck", encoding="utf-8")
+    (repo / "docs" / "data").mkdir(parents=True)
+    (repo / "docs" / "data" / "latest.json").write_text("{}", encoding="utf-8")
+    (repo / "chimera_lab" / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    worktree = services.local_worker.sandbox_runner.prepare_worktree(str(repo), "copy_ignore_check")
+    assert (worktree / "chimera_lab" / "module.py").exists()
+    assert not (worktree / "data").exists()
+    assert not (worktree / "docs" / "data").exists()
 
 
 def test_meta_improvement_execute_marks_base_run_and_records_failure(tmp_path: Path) -> None:

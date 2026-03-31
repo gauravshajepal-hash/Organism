@@ -76,8 +76,9 @@ class SandboxRunner:
     def _copy_ignore(self, source_root: Path):  # type: ignore[no-untyped-def]
         def ignore(directory: str, names: list[str]) -> set[str]:
             ignored: set[str] = set()
+            current_dir = Path(directory).resolve()
             for name in names:
-                candidate = (Path(directory) / name).resolve()
+                candidate = (current_dir / name).resolve()
                 if self._is_within(candidate, self.worktrees_dir):
                     ignored.add(name)
                     continue
@@ -86,9 +87,31 @@ class SandboxRunner:
                     continue
                 if candidate.name == ".git" and candidate.parent == source_root:
                     ignored.add(name)
+                    continue
+                if self._is_runtime_state(candidate, source_root):
+                    ignored.add(name)
             return ignored
 
         return ignore
+
+    def _is_runtime_state(self, path: Path, source_root: Path) -> bool:
+        try:
+            relative = path.relative_to(source_root.resolve())
+        except ValueError:
+            return False
+        parts = relative.parts
+        if not parts:
+            return False
+        if parts[0] == "data":
+            return True
+        if relative.as_posix() == "docs/data" or relative.as_posix().startswith("docs/data/"):
+            return True
+        suffixes = "".join(path.suffixes).lower()
+        if suffixes in {".duckdb", ".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3"}:
+            return True
+        if path.name.lower().endswith((".duckdb", ".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3", ".jsonl.lock")):
+            return True
+        return False
 
     def _is_within(self, path: Path, parent: Path) -> bool:
         try:

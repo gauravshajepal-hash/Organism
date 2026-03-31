@@ -67,10 +67,14 @@ class Settings:
     arxiv_default_queries: list[str]
     arxiv_queries_per_cycle: int
     arxiv_parallel_queries: int
+    arxiv_query_pool_limit: int
     supervisor_enabled: bool
     supervisor_poll_interval_seconds: int
     supervisor_objective_limit: int
     supervisor_parallel_objectives: int
+    supervisor_min_research_objectives: int
+    supervisor_research_slots_per_cycle: int
+    supervisor_meta_target_cooldown_minutes: int
     supervisor_stable_cycles_required: int
     supervisor_auto_promote_enabled: bool
     supervisor_default_objectives: list[str]
@@ -164,10 +168,14 @@ def load_settings() -> Settings:
         ],
         arxiv_queries_per_cycle=int(os.getenv("CHIMERA_ARXIV_QUERIES_PER_CYCLE", "3")),
         arxiv_parallel_queries=int(os.getenv("CHIMERA_ARXIV_PARALLEL_QUERIES", "3")),
+        arxiv_query_pool_limit=int(os.getenv("CHIMERA_ARXIV_QUERY_POOL_LIMIT", "16")),
         supervisor_enabled=_env_flag("CHIMERA_ENABLE_SUPERVISOR", background_default),
         supervisor_poll_interval_seconds=int(os.getenv("CHIMERA_SUPERVISOR_POLL_INTERVAL_SECONDS", "900")),
         supervisor_objective_limit=int(os.getenv("CHIMERA_SUPERVISOR_OBJECTIVE_LIMIT", "3")),
         supervisor_parallel_objectives=int(os.getenv("CHIMERA_SUPERVISOR_PARALLEL_OBJECTIVES", "3")),
+        supervisor_min_research_objectives=int(os.getenv("CHIMERA_SUPERVISOR_MIN_RESEARCH_OBJECTIVES", "2")),
+        supervisor_research_slots_per_cycle=int(os.getenv("CHIMERA_SUPERVISOR_RESEARCH_SLOTS_PER_CYCLE", "1")),
+        supervisor_meta_target_cooldown_minutes=int(os.getenv("CHIMERA_SUPERVISOR_META_TARGET_COOLDOWN_MINUTES", "60")),
         supervisor_stable_cycles_required=int(os.getenv("CHIMERA_SUPERVISOR_STABLE_CYCLES_REQUIRED", "2")),
         supervisor_auto_promote_enabled=_env_flag("CHIMERA_SUPERVISOR_AUTO_PROMOTE", True),
         supervisor_default_objectives=[

@@ -219,6 +219,7 @@ class MutationLab:
         target_path = candidate.get("target_path")
         source_refs = self._mutation_source_refs(candidate)
         plan = self.local_worker.plan_mutation(mission, program, candidate, operator, target_path or "")
+        plan["edits"] = self._bounded_edits(plan.get("edits") or [], operator, plan.get("selected_files") or [])
         applied_edits = []
         apply_errors = []
         self.artifact_store.create(
@@ -572,6 +573,7 @@ class MutationLab:
             ],
         }
         repair_plan = self.local_worker.plan_mutation(mission, program, repair_run, f"{operator}_repair", target_path)
+        repair_plan["edits"] = self._bounded_edits(repair_plan.get("edits") or [], f"{operator}_repair", repair_plan.get("selected_files") or [])
         repair_applied, repair_errors = self._apply_edits(
             Path(target_path),
             repair_plan["edits"],
@@ -630,6 +632,7 @@ class MutationLab:
             ],
         }
         repair_plan = self.local_worker.plan_mutation(mission, program, repair_run, f"{operator}_apply_repair", target_path)
+        repair_plan["edits"] = self._bounded_edits(repair_plan.get("edits") or [], f"{operator}_apply_repair", repair_plan.get("selected_files") or [])
         repair_applied, repair_errors = self._apply_edits(
             Path(target_path),
             repair_plan["edits"],
@@ -708,6 +711,35 @@ class MutationLab:
     def _record_source_feedback(self, source_refs: list[str], event: str, **deltas: int) -> None:
         for source_ref in source_refs:
             self.storage.record_scout_feedback(canonicalize_source_ref(source_ref), last_event=event, **deltas)
+
+    def _bounded_edits(self, edits: list[dict], operator: str, selected_files: list[str]) -> list[dict]:
+        if not edits:
+            return []
+        normalized_selected = [self._normalize_relative_path(path) for path in selected_files if str(path).strip()]
+        normalized: list[dict] = []
+        for edit in edits:
+            path = str(edit.get("path") or "").strip()
+            replacements = list(edit.get("replacements") or [])
+            if not path or not replacements:
+                continue
+            normalized.append(
+                {
+                    "path": self._normalize_relative_path(path),
+                    "replacements": replacements[:2],
+                }
+            )
+        if not normalized:
+            return []
+        if normalized_selected:
+            preferred = [edit for edit in normalized if edit["path"] in normalized_selected]
+            if preferred:
+                normalized = preferred
+        lower_operator = operator.lower()
+        single_file = any(token in lower_operator for token in {"repair", "simplify", "stabilize", "diagnose"})
+        if single_file:
+            chosen = normalized[0]
+            return [{"path": chosen["path"], "replacements": chosen["replacements"][:2]}]
+        return normalized[: max(1, min(len(normalized), self.guardrails.settings.mutation_max_files))]
 
     def _promotion_review_verdict(self, candidate: dict) -> dict | None:
         candidate_run_id = candidate["id"]

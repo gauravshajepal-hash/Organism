@@ -126,20 +126,34 @@ class ArxivScheduler:
     def _queries(self) -> list[str]:
         queries: list[str] = []
         for query in self.settings.arxiv_default_queries:
-            if query and query not in queries:
-                queries.append(query)
-        for pipeline in self.storage.list_research_pipelines()[:5]:
-            question = str(pipeline.get("question") or "").strip()
-            if question and question not in queries:
-                queries.append(question)
-        for run in self.storage.list_task_runs()[:20]:
+            self._append_query(queries, query)
+        for pipeline in self.storage.list_research_pipelines()[:8]:
+            self._append_query(queries, pipeline.get("question"))
+        for objective in self.storage.list_objectives()[:40]:
+            if objective.get("kind") not in {"research_ingest", "plan", "next_step_hypothesis", "meta_improvement"}:
+                continue
+            metadata = objective.get("metadata") or {}
+            self._append_query(queries, objective.get("objective"))
+            self._append_query(queries, metadata.get("source_discovery_query"))
+        for artifact in self.artifact_store.list(limit=80):
+            if artifact.get("type") not in {"next_step_hypothesis", "failure_lesson"}:
+                continue
+            payload = artifact.get("payload") or {}
+            self._append_query(queries, payload.get("next_move"))
+            self._append_query(queries, payload.get("lesson"))
+        for run in self.storage.list_task_runs()[:30]:
             if run.get("task_type") not in {"research_ingest", "plan", "review"}:
                 continue
             payload = run.get("input_payload") or {}
-            query = str(payload.get("research_question") or run.get("instructions") or "").strip()
-            if query and query not in queries:
-                queries.append(query)
-        return queries[:8]
+            self._append_query(queries, payload.get("research_question") or run.get("instructions"))
+        return queries[: self.settings.arxiv_query_pool_limit]
+
+    def _append_query(self, queries: list[str], value: Any) -> None:
+        query = " ".join(str(value or "").split()).strip()
+        if len(query) < 12:
+            return
+        if query not in queries:
+            queries.append(query)
 
     def _cycle_queries(self, queries: list[str], cursor: int) -> tuple[list[str], int]:
         if not queries:

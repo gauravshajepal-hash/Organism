@@ -74,6 +74,38 @@ def test_local_run_flow(tmp_path: Path) -> None:
     assert "sandbox_execution" in run_artifact_types
 
 
+def test_command_failure_marks_run_failed_and_writes_failure_memory(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    _, program_id = create_seed_objects(client)
+    workspace = tmp_path / "failing_command_workspace"
+    workspace.mkdir()
+    (workspace / "hello.txt").write_text("hello", encoding="utf-8")
+
+    run = client.post(
+        f"/programs/{program_id}/runs",
+        json={
+            "task_type": "code",
+            "instructions": "Run a command that should fail and record the lesson.",
+            "target_path": str(workspace),
+            "command": "python -c \"import sys; sys.exit(3)\"",
+        },
+    ).json()
+
+    started = client.post(f"/runs/{run['id']}/start")
+    assert started.status_code == 200
+    payload = started.json()
+    assert payload["status"] == "failed"
+    assert "Command failed" in payload["result_summary"]
+
+    run_artifacts = client.get(f"/runs/{run['id']}/artifacts").json()
+    artifact_types = {item["type"] for item in run_artifacts}
+    assert "run_result" in artifact_types
+    assert "failure_lesson" in artifact_types
+    assert "next_step_hypothesis" in artifact_types
+    run_result = next(item for item in run_artifacts if item["type"] == "run_result")
+    assert run_result["payload"]["command_passed"] is False
+
+
 def test_failed_run_writes_failure_lesson_and_next_step_hypothesis(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     _, program_id = create_seed_objects(client)
