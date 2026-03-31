@@ -150,7 +150,7 @@ class ArxivScheduler:
 
     def _append_query(self, queries: list[str], value: Any) -> None:
         query = " ".join(str(value or "").split()).strip()
-        if len(query) < 12:
+        if len(query) < 6:
             return
         if query not in queries:
             queries.append(query)
