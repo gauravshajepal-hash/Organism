@@ -32,6 +32,16 @@ class Settings:
     ollama_timeout_seconds: int
     enable_ollama: bool
     sandbox_mode: str
+    deep_research_enabled: bool
+    deep_research_repo_dir: Path
+    deep_research_output_dir: Path
+    deep_research_default_provider: str
+    deep_research_default_model: str
+    deep_research_max_iterations: int
+    deep_research_breadth: int
+    deep_research_depth: int
+    deep_research_timeout_seconds: int
+    deep_research_email: str | None
     frontier_provider: str
     frontier_model: str
     frontier_api_key: str | None
@@ -120,6 +130,16 @@ def load_settings() -> Settings:
         ollama_timeout_seconds=int(os.getenv("CHIMERA_OLLAMA_TIMEOUT_SECONDS", "240")),
         enable_ollama=_env_flag("CHIMERA_ENABLE_OLLAMA", True),
         sandbox_mode=os.getenv("CHIMERA_SANDBOX_MODE", "local").strip().lower(),
+        deep_research_enabled=_env_flag("CHIMERA_ENABLE_DEEP_RESEARCH", background_default),
+        deep_research_repo_dir=Path(os.getenv("CHIMERA_DEEP_RESEARCH_REPO_DIR", str(base / "external_tools" / "deep-researcher"))).resolve(),
+        deep_research_output_dir=Path(os.getenv("CHIMERA_DEEP_RESEARCH_OUTPUT_DIR", str(base / "deep_research"))).resolve(),
+        deep_research_default_provider=os.getenv("CHIMERA_DEEP_RESEARCH_PROVIDER", "ollama").strip().lower(),
+        deep_research_default_model=os.getenv("CHIMERA_DEEP_RESEARCH_MODEL", os.getenv("CHIMERA_LOCAL_MODEL", "qwen2.5-coder:7b")),
+        deep_research_max_iterations=int(os.getenv("CHIMERA_DEEP_RESEARCH_MAX_ITERATIONS", "6")),
+        deep_research_breadth=int(os.getenv("CHIMERA_DEEP_RESEARCH_BREADTH", "2")),
+        deep_research_depth=int(os.getenv("CHIMERA_DEEP_RESEARCH_DEPTH", "1")),
+        deep_research_timeout_seconds=int(os.getenv("CHIMERA_DEEP_RESEARCH_TIMEOUT_SECONDS", "900")),
+        deep_research_email=(os.getenv("CHIMERA_DEEP_RESEARCH_EMAIL") or os.getenv("DEEP_RESEARCH_EMAIL") or "").strip() or None,
         frontier_provider=os.getenv("CHIMERA_FRONTIER_PROVIDER", "manual").strip().lower(),
         frontier_model=os.getenv("CHIMERA_FRONTIER_MODEL", "gpt-5.4"),
         frontier_api_key=os.getenv("OPENAI_API_KEY"),
