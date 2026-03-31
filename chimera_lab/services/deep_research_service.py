@@ -103,12 +103,19 @@ class DeepResearcherService:
         metadata_path = run_dir / "metadata.json"
         bibtex_path = run_dir / "references.bib"
         report_text = report_path.read_text(encoding="utf-8") if report_path.exists() else ""
+        bibtex_text = bibtex_path.read_text(encoding="utf-8") if bibtex_path.exists() else ""
+        report_metadata = self._report_metadata(report_text)
         papers = self._load_json_file(papers_path, [])
+        if not papers and bibtex_text:
+            papers = self._papers_from_bibtex(bibtex_text)
         metadata = self._load_json_file(metadata_path, {})
+        metadata = {**report_metadata, **metadata}
         report_summary = self._summarize_report(report_text)
         paper_refs = self._paper_source_refs(papers)
         normalized_papers = self._normalize_papers(query, papers)
         merged_refs = list(dict.fromkeys([*list(source_refs or []), *paper_refs]))
+        reported_paper_count = int(report_metadata.get("papers_found") or 0)
+        paper_count = max(len(normalized_papers), reported_paper_count)
 
         run_artifact = self.artifact_store.create(
             "deep_research_run",
@@ -120,7 +127,7 @@ class DeepResearcherService:
                 "output_dir": str(run_dir),
                 "started_at": started_at,
                 "finished_at": _utc_now(),
-                "paper_count": len(papers),
+                "paper_count": paper_count,
                 "metadata": metadata,
                 "stdout": process.stdout[-4000:],
                 "stderr": process.stderr[-4000:],
@@ -134,10 +141,13 @@ class DeepResearcherService:
                 "query": normalized_query,
                 "report_path": str(report_path),
                 "summary": report_summary,
-                "paper_count": len(papers),
+                "paper_count": paper_count,
                 "metadata_path": str(metadata_path),
                 "bibtex_path": str(bibtex_path),
                 "output_dir": str(run_dir),
+                "synthesis_error": report_metadata.get("synthesis_error"),
+                "databases": report_metadata.get("databases", []),
+                "year_range": report_metadata.get("year_range"),
             },
             source_refs=[run_artifact["id"], *merged_refs],
             created_by="deep_research_service",
@@ -147,8 +157,8 @@ class DeepResearcherService:
             {
                 "query": normalized_query,
                 "papers_path": str(papers_path),
-                "paper_count": len(papers),
-                "papers": papers[:50],
+                "paper_count": paper_count,
+                "papers": normalized_papers[:50],
             },
             source_refs=[run_artifact["id"], *merged_refs],
             created_by="deep_research_service",
@@ -169,7 +179,7 @@ class DeepResearcherService:
             source_refs=[report_artifact["id"], papers_artifact["id"], *merged_refs],
             metadata={
                 "query": normalized_query,
-                "paper_count": len(papers),
+                "paper_count": paper_count,
                 "output_dir": str(run_dir),
                 "metadata": metadata,
             },
@@ -192,7 +202,7 @@ class DeepResearcherService:
             "provider": provider or self.settings.deep_research_default_provider,
             "model": model or self.settings.deep_research_default_model,
             "output_dir": str(run_dir),
-            "paper_count": len(papers),
+            "paper_count": paper_count,
             "paper_source_refs": paper_refs[:50],
             "papers": normalized_papers[:50],
             "report_summary": report_summary,
@@ -226,7 +236,7 @@ class DeepResearcherService:
                     source_refs=source_refs,
                 )
                 results = list(result.get("papers") or [])[:requested_max_results]
-                if results and not str(result.get("report_summary", "")).lower().startswith("error during synthesis:"):
+                if results:
                     digests = self._digest_results(results[: max(0, requested_digest_top_n)], force=force)
                     payload = {
                         "query": query,
@@ -240,8 +250,10 @@ class DeepResearcherService:
                         "provider": result.get("provider"),
                         "model": result.get("model"),
                         "report_summary": result.get("report_summary", ""),
+                        "metadata": result.get("metadata", {}),
                         "report_artifact_id": result.get("report_artifact_id"),
                         "papers_artifact_id": result.get("papers_artifact_id"),
+                        "partial_success": bool(result.get("metadata", {}).get("synthesis_error")),
                     }
                     self.artifact_store.create(
                         "literature_ingestion_cycle",
@@ -356,6 +368,65 @@ class DeepResearcherService:
     def _summarize_report(self, report_text: str) -> str:
         lines = [line.strip() for line in report_text.splitlines() if line.strip() and not line.strip().startswith("<!--")]
         return " ".join(lines[:8])[:4000]
+
+    def _report_metadata(self, report_text: str) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        for line in report_text.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("<!--") or not stripped.endswith("-->"):
+                continue
+            content = stripped[4:-3].strip()
+            if ":" not in content:
+                continue
+            key, raw_value = content.split(":", 1)
+            key = key.strip().lower().replace(" ", "_")
+            value = raw_value.strip()
+            if key == "papers_found":
+                try:
+                    metadata["papers_found"] = int(value)
+                except ValueError:
+                    metadata["papers_found"] = value
+            elif key == "databases":
+                metadata["databases"] = [item.strip() for item in value.split(",") if item.strip()]
+            elif key == "year_range":
+                metadata["year_range"] = value
+            elif key in {"generated", "query"}:
+                metadata[key] = value
+        match = re.search(r"Error during synthesis:\s*(.+)", report_text, re.IGNORECASE)
+        if match:
+            metadata["synthesis_error"] = match.group(1).strip()
+        return metadata
+
+    def _papers_from_bibtex(self, bibtex_text: str) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        for raw_entry in re.split(r"(?=@\w+\{)", bibtex_text):
+            if not raw_entry.strip().startswith("@"):
+                continue
+            fields = {
+                key.strip().lower(): self._clean_bibtex_value(value)
+                for key, value in re.findall(r"(\w+)\s*=\s*\{([\s\S]*?)\}\s*,?", raw_entry)
+            }
+            arxiv_id = str(fields.get("eprint") or "").strip()
+            if arxiv_id:
+                arxiv_id = re.sub(r"v\d+$", "", arxiv_id)
+            paper = {
+                "title": fields.get("title") or "",
+                "summary": fields.get("abstract") or fields.get("title") or "",
+                "abstract": fields.get("abstract") or "",
+                "url": fields.get("url") or "",
+                "open_access_url": fields.get("url") or "",
+                "doi": fields.get("doi") or "",
+                "pmid": fields.get("pmid") or "",
+                "arxiv_id": arxiv_id or "",
+                "year": fields.get("year") or "",
+                "authors": fields.get("author") or "",
+            }
+            if paper["title"] or paper["url"] or paper["doi"] or paper["arxiv_id"]:
+                entries.append(paper)
+        return entries
+
+    def _clean_bibtex_value(self, value: str) -> str:
+        return re.sub(r"\s+", " ", str(value or "").replace("\n", " ")).strip()
 
     def _paper_source_refs(self, papers: list[dict[str, Any]]) -> list[str]:
         refs = [self._paper_source_ref(paper) for paper in papers]

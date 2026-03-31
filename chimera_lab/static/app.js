@@ -221,6 +221,9 @@ async function loadDeepResearchDetail(item) {
     query: item.query || "Untitled deep research run",
     summary: item.summary || "No report summary was stored.",
     paperCount: Number(item.paper_count || 0),
+    synthesisError: item.synthesis_error || "",
+    databases: Array.isArray(item.databases) ? item.databases : [],
+    yearRange: item.year_range || "",
     reportPath: item.report_path || "",
     metadataPath: item.metadata_path || "",
     bibtexPath: item.bibtex_path || "",
@@ -301,12 +304,24 @@ function renderDeepResearchDetail(detail) {
         <p>${escapeHtml(detail.summary)}</p>
       </div>
       <div class="focus-item">
+        <strong>Research status</strong>
+        <p>${escapeHtml(detail.synthesisError ? `The paper search worked, but the final synthesis step failed: ${detail.synthesisError}` : "The literature sweep completed normally.")}</p>
+      </div>
+      <div class="focus-item">
         <strong>When it ran</strong>
         <p>${escapeHtml(formatTime(detail.createdAt))}</p>
       </div>
       <div class="focus-item">
         <strong>Where the full report lives</strong>
         <p>${escapeHtml(detail.outputDir || detail.reportPath || "No output path recorded.")}</p>
+      </div>
+      <div class="focus-item">
+        <strong>Databases used</strong>
+        <p>${escapeHtml(detail.databases.length ? detail.databases.join(", ") : "No database list was recorded.")}</p>
+      </div>
+      <div class="focus-item">
+        <strong>Year range</strong>
+        <p>${escapeHtml(detail.yearRange || "No year range was recorded.")}</p>
       </div>
     </div>
     <div class="focus-subsection">

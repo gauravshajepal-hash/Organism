@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -130,6 +131,63 @@ def test_papers_arxiv_ingest_route_prefers_deep_research_engine(tmp_path: Path) 
     assert payload["engine"] == "deep_researcher"
     assert payload["report_artifact_id"] == "artifact_report"
     assert payload["results"][0]["source_ref"] == "https://arxiv.org/abs/2601.00001"
+
+
+def test_deep_research_run_recovers_partial_success_from_report_and_bibtex(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    service = client.app.state.services.deep_researcher
+    run_dir = tmp_path / "deep_research_run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "report.md").write_text(
+        "\n".join(
+            [
+                "<!-- Query: How can self-improving coding agents improve mutation selection loops? -->",
+                "<!-- Generated: 2026-03-31T15:47:02.317933 -->",
+                "<!-- Papers found: 60 -->",
+                "<!-- Databases: arxiv (20), openalex (20), crossref (20) -->",
+                "<!-- Year range: 1981-2026 -->",
+                "",
+                "Error during synthesis: Request timed out.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "references.bib").write_text(
+        "\n".join(
+            [
+                "% Bibliography exported by Deep Researcher",
+                "@misc{robeyns2025a,",
+                "  title = {A Self-Improving Coding Agent},",
+                "  author = {Maxime Robeyns and Martin Szummer and Laurence Aitchison},",
+                "  year = {2025},",
+                "  url = {https://arxiv.org/pdf/2504.15228v2},",
+                "  eprint = {2504.15228v2},",
+                "  archiveprefix = {arXiv},",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with (
+        patch.object(type(service), "is_available", return_value=True),
+        patch("chimera_lab.services.deep_research_service.subprocess.run", return_value=subprocess.CompletedProcess(["deep-researcher"], 0, "", "")),
+        patch.object(type(service), "_latest_run_dir", return_value=run_dir),
+    ):
+        result = service.run(
+            "How can self-improving coding agents improve mutation selection loops?",
+            provider="ollama",
+            model="qwen3.5:9b",
+            max_iterations=1,
+            breadth=1,
+            depth=0,
+            source_refs=["https://github.com/jackswl/deep-researcher"],
+        )
+
+    assert result["paper_count"] == 60
+    assert result["metadata"]["synthesis_error"] == "Request timed out."
+    assert result["metadata"]["databases"] == ["arxiv (20)", "openalex (20)", "crossref (20)"]
+    assert result["paper_source_refs"] == ["https://arxiv.org/abs/2504.15228"]
 
 
 def test_arxiv_scheduler_uses_recent_queries(tmp_path: Path) -> None:
