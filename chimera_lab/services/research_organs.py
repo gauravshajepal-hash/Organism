@@ -39,6 +39,7 @@ class ResearchOrgans:
                         "stage": task_type,
                         "live_sources": [item["source_ref"] for item in live_sources],
                         "source_trace_required": task_type in {"research_ingest", "plan", "review", "status"},
+                        "deep_research": task_type == "research_ingest",
                     },
                 )
                 stage_run_ids.append(stage_run["id"])

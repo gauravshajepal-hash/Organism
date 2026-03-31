@@ -6,6 +6,7 @@ from chimera_lab.db import Storage
 from chimera_lab.config import Settings
 from chimera_lab.services.assimilation_service import AssimilationService
 from chimera_lab.services.artifact_store import ArtifactStore
+from chimera_lab.services.deep_research_service import DeepResearcherService
 from chimera_lab.services.failure_memory import FailureMemoryService
 from chimera_lab.services.memory_tiers import MemoryTierOrchestrator
 from chimera_lab.services.research_evolution import ResearchEvolutionLab
@@ -26,6 +27,7 @@ class RunAutomation:
         research_evolution_lab: ResearchEvolutionLab,
         assimilation_service: AssimilationService,
         failure_memory: FailureMemoryService,
+        deep_researcher: DeepResearcherService | None = None,
     ) -> None:
         self.settings = settings
         self.storage = storage
@@ -36,6 +38,7 @@ class RunAutomation:
         self.research_evolution_lab = research_evolution_lab
         self.assimilation_service = assimilation_service
         self.failure_memory = failure_memory
+        self.deep_researcher = deep_researcher
         self.referee_loop = RefereeLoop()
 
     def prepare_run(self, run: dict) -> dict:
@@ -63,6 +66,8 @@ class RunAutomation:
                 limit_per_feed=5,
             )
             live_sources = self.scout_service.search_live_sources(query, per_source=3)
+            deep_research_result: dict[str, Any] | None = None
+            deep_research_error: str | None = None
             synced_refs = []
             for item in feed_items:
                 candidate = self.scout_service.intake(
@@ -81,7 +86,35 @@ class RunAutomation:
                     source_refs=[item["source_ref"]],
                     metadata={"title": item.get("title", ""), "feed_name": item.get("feed_name", "")},
                 )
-            source_candidates = list(feed_items) + list(live_sources)
+            use_deep_research = bool(payload.get("deep_research", self.settings.deep_research_enabled))
+            if use_deep_research and self.deep_researcher and self.deep_researcher.is_available():
+                try:
+                    deep_research_result = self.deep_researcher.run(
+                        query,
+                        provider=payload.get("deep_research_provider"),
+                        model=payload.get("deep_research_model"),
+                        max_iterations=payload.get("deep_research_max_iterations"),
+                        breadth=payload.get("deep_research_breadth"),
+                        depth=payload.get("deep_research_depth"),
+                        source_refs=[*synced_refs, *[item["source_ref"] for item in live_sources]],
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    deep_research_error = str(exc)
+                    self.artifact_store.create(
+                        "deep_research_prepare_error",
+                        {"run_id": run["id"], "query": query, "error": deep_research_error},
+                        source_refs=[run["id"]],
+                        created_by="run_automation",
+                    )
+
+            deep_candidates_by_ref: dict[str, dict[str, Any]] = {}
+            if deep_research_result:
+                for candidate in self.scout_service.list():
+                    source_ref = str(candidate.get("source_ref", "")).strip()
+                    if source_ref in set(deep_research_result.get("paper_source_refs") or []):
+                        deep_candidates_by_ref[source_ref] = candidate
+
+            source_candidates = list(deep_candidates_by_ref.values()) + list(feed_items) + list(live_sources)
             source_quality_gate = self.assimilation_service.grade_source_bundle(query, source_candidates)
             absorption_candidates = self.assimilation_service.evaluate_candidates(source_candidates[:8], question=query, auto_stage=False)
             for item in source_candidates:
@@ -97,6 +130,17 @@ class RunAutomation:
             payload["scout_query_plan"] = scout_query_plan
             payload["source_quality_gate"] = source_quality_gate
             payload["absorption_candidates"] = absorption_candidates[:5]
+            if deep_research_result:
+                payload["deep_research_result"] = {
+                    "report_artifact_id": deep_research_result.get("report_artifact_id"),
+                    "papers_artifact_id": deep_research_result.get("papers_artifact_id"),
+                    "paper_count": deep_research_result.get("paper_count"),
+                    "paper_source_refs": deep_research_result.get("paper_source_refs", [])[:20],
+                    "report_summary": deep_research_result.get("report_summary", ""),
+                    "output_dir": deep_research_result.get("output_dir"),
+                }
+            if deep_research_error:
+                payload["deep_research_error"] = deep_research_error
             if source_quality_gate["decision"] != "accept":
                 payload["scout_rewrite_hint"] = source_quality_gate["rewrite_hint"]
             payload["memory_context"] = self.memory_tiers.retrieve(query, tier="working", limit=5)
@@ -106,9 +150,13 @@ class RunAutomation:
                 "query_plan": scout_query_plan,
                 "feed_sync_refs": synced_refs[:10],
                 "live_sources": payload["live_sources"][:10],
+                "deep_research_refs": (deep_research_result or {}).get("paper_source_refs", [])[:10],
+                "deep_research_report_artifact_id": (deep_research_result or {}).get("report_artifact_id"),
                 "source_quality_gate": source_quality_gate,
             }
             auto_organs.extend(["scout_feeds", "live_scout", "memory_tiers", "source_quality_gate", "assimilation_advisor"])
+            if deep_research_result:
+                auto_organs.append("deep_researcher")
 
         elif run["task_type"] == "plan":
             branch_factor = int(payload.get("tree_branch_factor", self.settings.tree_search_branch_factor))

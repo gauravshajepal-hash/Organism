@@ -348,6 +348,16 @@ class AssimilationEvaluateCreate(BaseModel):
     auto_stage: bool = False
 
 
+class DeepResearchCreate(BaseModel):
+    query: str
+    provider: str | None = None
+    model: str | None = None
+    max_iterations: int | None = None
+    breadth: int | None = None
+    depth: int | None = None
+    source_refs: list[str] = Field(default_factory=list)
+
+
 class ArxivIngestCreate(BaseModel):
     query: str
     max_results: int | None = None

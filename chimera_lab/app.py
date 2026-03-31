@@ -19,6 +19,7 @@ from chimera_lab.schemas import (
     ChannelMessage,
     ChannelResponse,
     CompanyMonthCreate,
+    DeepResearchCreate,
     FrontierResponseCreate,
     GitCheckpointCreate,
     GitInitRequest,
@@ -76,6 +77,7 @@ from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.autonomy_supervisor import AutonomySupervisor
 from chimera_lab.services.channel_gateway import ChannelGateway
 from chimera_lab.services.company_layer import AutonomousCompany
+from chimera_lab.services.deep_research_service import DeepResearcherService
 from chimera_lab.services.evolution_rollout import EvolutionRolloutManager
 from chimera_lab.services.failure_memory import FailureMemoryService
 from chimera_lab.services.frontier_adapter import FrontierAdapter
@@ -120,6 +122,7 @@ class AppServices:
     scout_service: ScoutService
     scout_feed_registry: ScoutFeedRegistry
     assimilation_service: AssimilationService
+    deep_researcher: DeepResearcherService
     paper_digest_service: PaperDigestService
     arxiv_scheduler: ArxivScheduler
     skill_registry: SkillRegistry
@@ -167,6 +170,7 @@ def create_app() -> FastAPI:
     mutation_guardrails = MutationGuardrails(settings)
     memory_service = MemoryService(storage)
     memory_tiers = MemoryTierOrchestrator()
+    deep_researcher = DeepResearcherService(settings, artifact_store, memory_tiers=memory_tiers, scout_service=scout_service)
     failure_memory = FailureMemoryService(settings, storage, artifact_store, memory_service, memory_tiers)
     paper_digest_service = PaperDigestService(settings, scout_service, artifact_store, memory_tiers=memory_tiers)
     publication_service = PublicationService(settings, storage, analytics_mirror=analytics_mirror)
@@ -193,6 +197,7 @@ def create_app() -> FastAPI:
         research_evolution_lab=research_evolution_lab,
         assimilation_service=assimilation_service,
         failure_memory=failure_memory,
+        deep_researcher=deep_researcher,
     )
     run_executor = RunExecutor(
         storage=storage,
@@ -235,6 +240,7 @@ def create_app() -> FastAPI:
         scout_service=scout_service,
         scout_feed_registry=scout_feed_registry,
         assimilation_service=assimilation_service,
+        deep_researcher=deep_researcher,
         paper_digest_service=paper_digest_service,
         arxiv_scheduler=arxiv_scheduler,
         skill_registry=skill_registry,
@@ -633,6 +639,29 @@ def create_app() -> FastAPI:
     @app.get("/papers/digests", response_model=list[dict[str, Any]])
     def list_paper_digests(services: AppServices = Depends(get_services)) -> list[dict[str, Any]]:
         return services.paper_digest_service.list_digests()
+
+    @app.post("/research/deep-research", response_model=dict[str, Any])
+    def create_deep_research(payload: DeepResearchCreate, services: AppServices = Depends(get_services)) -> dict[str, Any]:
+        if not services.deep_researcher.is_available():
+            raise HTTPException(status_code=503, detail="Deep researcher is not installed or available")
+        try:
+            return services.deep_researcher.run(
+                payload.query,
+                provider=payload.provider,
+                model=payload.model,
+                max_iterations=payload.max_iterations,
+                breadth=payload.breadth,
+                depth=payload.depth,
+                source_refs=payload.source_refs,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/research/deep-research", response_model=list[dict[str, Any]])
+    def list_deep_research(limit: int = 20, services: AppServices = Depends(get_services)) -> list[dict[str, Any]]:
+        return services.deep_researcher.list_recent(limit=limit)
 
     @app.get("/scout/feeds/catalog", response_model=list[dict[str, Any]])
     def scout_feed_catalog(services: AppServices = Depends(get_services)) -> list[dict[str, Any]]:

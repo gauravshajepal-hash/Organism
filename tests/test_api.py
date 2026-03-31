@@ -353,6 +353,68 @@ def test_research_ingest_run_records_source_trace_bundle(tmp_path: Path) -> None
     assert "https://github.com/bytedance/deer-flow" in bundles[0]["payload"]["source_refs"]
 
 
+def test_deep_research_endpoint_and_research_ingest_auto_attach(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    _, program_id = create_seed_objects(client)
+    services = client.app.state.services
+    deep_ref = "https://arxiv.org/abs/2601.06966"
+    deep_result = {
+        "query": "deep research query",
+        "provider": "ollama",
+        "model": "qwen3.5:9b",
+        "output_dir": str(tmp_path / "deep-output"),
+        "paper_count": 1,
+        "paper_source_refs": [deep_ref],
+        "report_summary": "Deep research summary about memory and self-improvement.",
+        "metadata": {"title": "Deep Report"},
+        "report_artifact_id": "artifact_report",
+        "papers_artifact_id": "artifact_papers",
+    }
+    deep_candidate = {
+        "id": "scout_deep_report",
+        "source_type": "paper",
+        "source_ref": deep_ref,
+        "summary": "Paper about memory and self-improvement.",
+        "novelty_score": 0.83,
+        "trust_score": 0.91,
+        "license": "arXiv",
+        "created_at": "2026-03-31T00:00:00+00:00",
+    }
+
+    with patch.object(type(services.deep_researcher), "is_available", return_value=True), patch.object(
+        type(services.deep_researcher),
+        "run",
+        return_value=deep_result,
+    ):
+        endpoint = client.post(
+            "/research/deep-research",
+            json={"query": "Deep research query", "provider": "ollama", "model": "qwen3.5:9b"},
+        )
+        assert endpoint.status_code == 200
+        assert endpoint.json()["report_artifact_id"] == "artifact_report"
+
+        services.scout_feed_registry.discover_with_queries = lambda query, queries, limit_per_feed=5: []  # noqa: ARG005
+        services.scout_service.search_live_sources = lambda query, per_source=3: []  # noqa: ARG005
+        services.scout_service.list = lambda: [deep_candidate]  # noqa: ARG005
+
+        run = client.post(
+            f"/programs/{program_id}/runs",
+            json={
+                "task_type": "research_ingest",
+                "instructions": "Use deep research to find upgrade ideas.",
+                "input_payload": {"deep_research": True},
+            },
+        ).json()
+        started = client.post(f"/runs/{run['id']}/start")
+        assert started.status_code == 200
+        payload = started.json()["input_payload"]
+        assert "deep_researcher" in payload["auto_organs"]
+        assert payload["deep_research_result"]["report_artifact_id"] == "artifact_report"
+        assert payload["source_trace_bundle"]["deep_research_report_artifact_id"] == "artifact_report"
+        assert deep_ref in payload["source_trace_bundle"]["deep_research_refs"]
+        assert payload["absorption_candidates"]
+
+
 def test_scout_service_builds_compact_and_expanded_queries(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     plan = client.app.state.services.scout_service.build_query_plan(
