@@ -11,6 +11,7 @@ from typing import Any
 from chimera_lab.config import Settings
 from chimera_lab.db import Storage
 from chimera_lab.services.artifact_store import ArtifactStore
+from chimera_lab.services.deep_research_service import DeepResearcherService
 from chimera_lab.services.paper_digest_service import PaperDigestService
 from chimera_lab.services.runtime_guard import RuntimeGuard
 
@@ -22,6 +23,7 @@ class ArxivScheduler:
     artifact_store: ArtifactStore
     paper_digest_service: PaperDigestService
     runtime_guard: RuntimeGuard
+    deep_researcher: DeepResearcherService | None = None
     root: Path = field(init=False)
     state_path: Path = field(init=False)
     _thread: threading.Thread | None = field(init=False, default=None)
@@ -93,18 +95,27 @@ class ArxivScheduler:
         return cycle
 
     def _run_query(self, query: str, force: bool) -> dict[str, Any]:
-        result = self.paper_digest_service.ingest_query(
-            query,
-            max_results=self.settings.arxiv_max_results_per_query,
-            force=force,
-            digest_top_n=self.settings.arxiv_digest_top_n,
-        )
+        if self.deep_researcher is not None:
+            result = self.deep_researcher.ingest_query(
+                query,
+                max_results=self.settings.arxiv_max_results_per_query,
+                force=force,
+                digest_top_n=self.settings.arxiv_digest_top_n,
+            )
+        else:
+            result = self.paper_digest_service.ingest_query(
+                query,
+                max_results=self.settings.arxiv_max_results_per_query,
+                force=force,
+                digest_top_n=self.settings.arxiv_digest_top_n,
+            )
         return {
             "query": query,
             "result_count": len(result.get("results", [])),
             "digest_count": len(result.get("digests", [])),
             "cached": bool(result.get("cached")),
             "backoff_active": bool(result.get("backoff_active")),
+            "engine": str(result.get("engine") or "arxiv"),
         }
 
     def snapshot(self) -> dict[str, Any]:
@@ -112,6 +123,11 @@ class ArxivScheduler:
         state["thread_alive"] = bool(self._thread and self._thread.is_alive())
         state["paper_digest"] = self.paper_digest_service.scheduler_snapshot()
         state["queries"] = self._queries()
+        state["literature_engine"] = (
+            "deep_researcher"
+            if self.deep_researcher and self.settings.deep_research_enabled and self.deep_researcher.is_available()
+            else "arxiv"
+        )
         return state
 
     def _loop(self) -> None:

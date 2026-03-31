@@ -89,6 +89,49 @@ def test_paper_ingestion_caches_and_digests(tmp_path: Path) -> None:
         assert len(digests.json()) == 1
 
 
+def test_papers_arxiv_ingest_route_prefers_deep_research_engine(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    services = client.app.state.services
+    services.settings.deep_research_enabled = True
+    deep_payload = {
+        "query": "agent memory evaluation",
+        "results": [
+            {
+                "id": "paper_test",
+                "source_type": "paper",
+                "source_ref": "https://arxiv.org/abs/2601.00001",
+                "title": "Test Paper",
+                "summary": "A paper about agent memory and evaluation.",
+                "novelty_score": 0.8,
+                "trust_score": 0.85,
+                "license": "arXiv",
+                "pdf_url": "https://arxiv.org/pdf/2601.00001.pdf",
+                "published": "2026-01-01",
+            }
+        ],
+        "digests": [],
+        "cached": False,
+        "backoff_active": False,
+        "fallback_used": False,
+        "engine": "deep_researcher",
+        "report_summary": "Deep-research literature sweep.",
+        "report_artifact_id": "artifact_report",
+        "papers_artifact_id": "artifact_papers",
+    }
+
+    with patch.object(type(services.deep_researcher), "ingest_query", return_value=deep_payload):
+        response = client.post(
+            "/papers/arxiv/ingest",
+            json={"query": "agent memory evaluation", "max_results": 3, "force": True, "digest_top_n": 1},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["engine"] == "deep_researcher"
+    assert payload["report_artifact_id"] == "artifact_report"
+    assert payload["results"][0]["source_ref"] == "https://arxiv.org/abs/2601.00001"
+
+
 def test_arxiv_scheduler_uses_recent_queries(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     _, program_id = create_seed_objects(client)

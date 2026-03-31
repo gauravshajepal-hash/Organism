@@ -358,18 +358,6 @@ def test_deep_research_endpoint_and_research_ingest_auto_attach(tmp_path: Path) 
     _, program_id = create_seed_objects(client)
     services = client.app.state.services
     deep_ref = "https://arxiv.org/abs/2601.06966"
-    deep_result = {
-        "query": "deep research query",
-        "provider": "ollama",
-        "model": "qwen3.5:9b",
-        "output_dir": str(tmp_path / "deep-output"),
-        "paper_count": 1,
-        "paper_source_refs": [deep_ref],
-        "report_summary": "Deep research summary about memory and self-improvement.",
-        "metadata": {"title": "Deep Report"},
-        "report_artifact_id": "artifact_report",
-        "papers_artifact_id": "artifact_papers",
-    }
     deep_candidate = {
         "id": "scout_deep_report",
         "source_type": "paper",
@@ -380,11 +368,24 @@ def test_deep_research_endpoint_and_research_ingest_auto_attach(tmp_path: Path) 
         "license": "arXiv",
         "created_at": "2026-03-31T00:00:00+00:00",
     }
+    deep_result = {
+        "query": "deep research query",
+        "provider": "ollama",
+        "model": "qwen3.5:9b",
+        "output_dir": str(tmp_path / "deep-output"),
+        "results": [deep_candidate],
+        "digests": [],
+        "engine": "deep_researcher",
+        "report_summary": "Deep research summary about memory and self-improvement.",
+        "metadata": {"title": "Deep Report"},
+        "report_artifact_id": "artifact_report",
+        "papers_artifact_id": "artifact_papers",
+    }
 
-    with patch.object(type(services.deep_researcher), "is_available", return_value=True), patch.object(
-        type(services.deep_researcher),
-        "run",
-        return_value=deep_result,
+    with (
+        patch.object(type(services.deep_researcher), "is_available", return_value=True),
+        patch.object(type(services.deep_researcher), "run", return_value=deep_result),
+        patch.object(type(services.deep_researcher), "ingest_query", return_value=deep_result),
     ):
         endpoint = client.post(
             "/research/deep-research",
@@ -395,7 +396,6 @@ def test_deep_research_endpoint_and_research_ingest_auto_attach(tmp_path: Path) 
 
         services.scout_feed_registry.discover_with_queries = lambda query, queries, limit_per_feed=5: []  # noqa: ARG005
         services.scout_service.search_live_sources = lambda query, per_source=3: []  # noqa: ARG005
-        services.scout_service.list = lambda: [deep_candidate]  # noqa: ARG005
 
         run = client.post(
             f"/programs/{program_id}/runs",

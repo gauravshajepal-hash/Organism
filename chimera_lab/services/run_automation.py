@@ -89,13 +89,12 @@ class RunAutomation:
             use_deep_research = bool(payload.get("deep_research", self.settings.deep_research_enabled))
             if use_deep_research and self.deep_researcher and self.deep_researcher.is_available():
                 try:
-                    deep_research_result = self.deep_researcher.run(
+                    deep_research_result = self.deep_researcher.ingest_query(
                         query,
+                        max_results=self.settings.arxiv_max_results_per_query,
+                        digest_top_n=self.settings.arxiv_digest_top_n,
                         provider=payload.get("deep_research_provider"),
                         model=payload.get("deep_research_model"),
-                        max_iterations=payload.get("deep_research_max_iterations"),
-                        breadth=payload.get("deep_research_breadth"),
-                        depth=payload.get("deep_research_depth"),
                         source_refs=[*synced_refs, *[item["source_ref"] for item in live_sources]],
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -109,9 +108,9 @@ class RunAutomation:
 
             deep_candidates_by_ref: dict[str, dict[str, Any]] = {}
             if deep_research_result:
-                for candidate in self.scout_service.list():
+                for candidate in deep_research_result.get("results") or []:
                     source_ref = str(candidate.get("source_ref", "")).strip()
-                    if source_ref in set(deep_research_result.get("paper_source_refs") or []):
+                    if source_ref:
                         deep_candidates_by_ref[source_ref] = candidate
 
             source_candidates = list(deep_candidates_by_ref.values()) + list(feed_items) + list(live_sources)
@@ -134,8 +133,10 @@ class RunAutomation:
                 payload["deep_research_result"] = {
                     "report_artifact_id": deep_research_result.get("report_artifact_id"),
                     "papers_artifact_id": deep_research_result.get("papers_artifact_id"),
-                    "paper_count": deep_research_result.get("paper_count"),
-                    "paper_source_refs": deep_research_result.get("paper_source_refs", [])[:20],
+                    "paper_count": len(deep_research_result.get("results", [])),
+                    "paper_source_refs": [item.get("source_ref") for item in (deep_research_result.get("results") or [])[:20] if item.get("source_ref")],
+                    "digest_count": len(deep_research_result.get("digests", [])),
+                    "engine": deep_research_result.get("engine"),
                     "report_summary": deep_research_result.get("report_summary", ""),
                     "output_dir": deep_research_result.get("output_dir"),
                 }
@@ -150,7 +151,7 @@ class RunAutomation:
                 "query_plan": scout_query_plan,
                 "feed_sync_refs": synced_refs[:10],
                 "live_sources": payload["live_sources"][:10],
-                "deep_research_refs": (deep_research_result or {}).get("paper_source_refs", [])[:10],
+                "deep_research_refs": [item.get("source_ref") for item in ((deep_research_result or {}).get("results") or [])[:10] if item.get("source_ref")],
                 "deep_research_report_artifact_id": (deep_research_result or {}).get("report_artifact_id"),
                 "source_quality_gate": source_quality_gate,
             }

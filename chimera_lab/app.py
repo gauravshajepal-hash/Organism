@@ -173,11 +173,12 @@ def create_app() -> FastAPI:
     deep_researcher = DeepResearcherService(settings, artifact_store, memory_tiers=memory_tiers, scout_service=scout_service)
     failure_memory = FailureMemoryService(settings, storage, artifact_store, memory_service, memory_tiers)
     paper_digest_service = PaperDigestService(settings, scout_service, artifact_store, memory_tiers=memory_tiers)
+    deep_researcher.paper_digest_service = paper_digest_service
     publication_service = PublicationService(settings, storage, analytics_mirror=analytics_mirror)
     git_safety = GitSafetyService(settings, artifact_store)
     github_repo_service = GitHubRepoService(settings, storage, artifact_store)
     runtime_guard = RuntimeGuard(settings, artifact_store, git_safety=git_safety)
-    arxiv_scheduler = ArxivScheduler(settings, storage, artifact_store, paper_digest_service, runtime_guard)
+    arxiv_scheduler = ArxivScheduler(settings, storage, artifact_store, paper_digest_service, runtime_guard, deep_researcher=deep_researcher)
     review_tribunal = ReviewTribunal(storage, artifact_store)
     mutation_lab = MutationLab(
         storage,
@@ -629,7 +630,7 @@ def create_app() -> FastAPI:
 
     @app.post("/papers/arxiv/ingest", response_model=dict[str, Any])
     def ingest_arxiv(payload: ArxivIngestCreate, services: AppServices = Depends(get_services)) -> dict[str, Any]:
-        return services.paper_digest_service.ingest_query(
+        return services.deep_researcher.ingest_query(
             payload.query,
             max_results=payload.max_results,
             force=payload.force,

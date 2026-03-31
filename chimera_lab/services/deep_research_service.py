@@ -4,15 +4,20 @@ import json
 import os
 import shutil
 import subprocess
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 from typing import Any
 
 from chimera_lab.config import Settings
 from chimera_lab.services.artifact_store import ArtifactStore
 from chimera_lab.services.memory_tiers import MemoryTierOrchestrator
 from chimera_lab.services.scout_service import ScoutService, canonicalize_source_ref
+
+if TYPE_CHECKING:
+    from chimera_lab.services.paper_digest_service import PaperDigestService
 
 
 def _utc_now() -> str:
@@ -25,6 +30,7 @@ class DeepResearcherService:
     artifact_store: ArtifactStore
     memory_tiers: MemoryTierOrchestrator
     scout_service: ScoutService
+    paper_digest_service: PaperDigestService | None = None
     repo_dir: Path = field(init=False)
     output_dir: Path = field(init=False)
 
@@ -46,7 +52,7 @@ class DeepResearcherService:
         breadth: int | None = None,
         depth: int | None = None,
         source_refs: list[str] | None = None,
-    ) -> dict[str, Any]:
+        ) -> dict[str, Any]:
         if not self.is_available():
             raise RuntimeError("deep_researcher_unavailable")
         normalized_query = " ".join(str(query or "").split()).strip()
@@ -101,6 +107,7 @@ class DeepResearcherService:
         metadata = self._load_json_file(metadata_path, {})
         report_summary = self._summarize_report(report_text)
         paper_refs = self._paper_source_refs(papers)
+        normalized_papers = self._normalize_papers(query, papers)
         merged_refs = list(dict.fromkeys([*list(source_refs or []), *paper_refs]))
 
         run_artifact = self.artifact_store.create(
@@ -187,11 +194,86 @@ class DeepResearcherService:
             "output_dir": str(run_dir),
             "paper_count": len(papers),
             "paper_source_refs": paper_refs[:50],
+            "papers": normalized_papers[:50],
             "report_summary": report_summary,
             "metadata": metadata,
             "report_artifact_id": report_artifact["id"],
             "papers_artifact_id": papers_artifact["id"],
         }
+
+    def ingest_query(
+        self,
+        query: str,
+        *,
+        max_results: int | None = None,
+        force: bool = False,
+        digest_top_n: int | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        source_refs: list[str] | None = None,
+    ) -> dict[str, Any]:
+        requested_max_results = max_results or self.settings.arxiv_max_results_per_query
+        requested_digest_top_n = self.settings.arxiv_digest_top_n if digest_top_n is None else digest_top_n
+        if self.settings.deep_research_enabled and self.is_available():
+            try:
+                result = self.run(
+                    query,
+                    provider=provider,
+                    model=model,
+                    max_iterations=min(self.settings.deep_research_max_iterations, 2),
+                    breadth=min(self.settings.deep_research_breadth, 2),
+                    depth=min(self.settings.deep_research_depth, 1),
+                    source_refs=source_refs,
+                )
+                results = list(result.get("papers") or [])[:requested_max_results]
+                if results and not str(result.get("report_summary", "")).lower().startswith("error during synthesis:"):
+                    digests = self._digest_results(results[: max(0, requested_digest_top_n)], force=force)
+                    payload = {
+                        "query": query,
+                        "fetch_query": query,
+                        "cached": False,
+                        "backoff_active": False,
+                        "results": results,
+                        "digests": digests,
+                        "fallback_used": False,
+                        "engine": "deep_researcher",
+                        "provider": result.get("provider"),
+                        "model": result.get("model"),
+                        "report_summary": result.get("report_summary", ""),
+                        "report_artifact_id": result.get("report_artifact_id"),
+                        "papers_artifact_id": result.get("papers_artifact_id"),
+                    }
+                    self.artifact_store.create(
+                        "literature_ingestion_cycle",
+                        {
+                            "query": query,
+                            "engine": "deep_researcher",
+                            "result_count": len(results),
+                            "digest_count": len(digests),
+                        },
+                        source_refs=[item.get("source_ref", "") for item in results[:20] if item.get("source_ref")],
+                        created_by="deep_research_service",
+                    )
+                    return payload
+            except Exception as exc:  # noqa: BLE001
+                self.artifact_store.create(
+                    "deep_research_ingestion_fallback",
+                    {"query": query, "error": str(exc)},
+                    source_refs=list(source_refs or []),
+                    created_by="deep_research_service",
+                )
+
+        if self.paper_digest_service is None:
+            raise RuntimeError("paper_digest_service_unavailable")
+        fallback = self.paper_digest_service.ingest_query(
+            query,
+            max_results=requested_max_results,
+            force=force,
+            digest_top_n=requested_digest_top_n,
+        )
+        fallback["engine"] = "arxiv_fallback"
+        fallback["fallback_used"] = True
+        return fallback
 
     def list_recent(self, limit: int = 20) -> list[dict[str, Any]]:
         items = []
@@ -291,3 +373,71 @@ class DeepResearcherService:
         if paper.get("pmid"):
             return f"https://pubmed.ncbi.nlm.nih.gov/{paper['pmid']}/"
         return ""
+
+    def _normalize_papers(self, query: str, papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for paper in papers:
+            source_ref = self._paper_source_ref(paper)
+            if not source_ref:
+                continue
+            title = str(paper.get("title") or source_ref).strip()
+            summary = str(paper.get("abstract") or paper.get("summary") or title).strip()
+            novelty_score, trust_score = self.scout_service._score_paper(query, title, summary)  # noqa: SLF001
+            pdf_url = self._paper_pdf_url(paper, source_ref)
+            normalized.append(
+                {
+                    "id": self._paper_id(source_ref),
+                    "source_type": "paper",
+                    "source_ref": source_ref,
+                    "title": title,
+                    "summary": summary,
+                    "novelty_score": novelty_score,
+                    "trust_score": trust_score,
+                    "license": str(paper.get("license") or "deep-researcher"),
+                    "pdf_url": pdf_url,
+                    "published": str(paper.get("publication_date") or paper.get("year") or ""),
+                }
+            )
+        return normalized
+
+    def _paper_id(self, source_ref: str) -> str:
+        digest = hashlib.sha1(source_ref.encode("utf-8", errors="ignore")).hexdigest()[:16]
+        return f"paper_{digest}"
+
+    def _paper_pdf_url(self, paper: dict[str, Any], source_ref: str) -> str:
+        for key in ("open_access_url", "pdf_url", "url"):
+            value = str(paper.get(key) or "").strip()
+            if value.endswith(".pdf") or "/pdf/" in value:
+                return value
+        if "/abs/" in source_ref:
+            return source_ref.replace("/abs/", "/pdf/") + ".pdf"
+        return ""
+
+    def _digest_results(self, results: list[dict[str, Any]], *, force: bool) -> list[dict[str, Any]]:
+        digests: list[dict[str, Any]] = []
+        if self.paper_digest_service is None:
+            return digests
+        for item in results:
+            source_ref = str(item.get("source_ref") or "").strip()
+            pdf_url = str(item.get("pdf_url") or "").strip() or None
+            if not source_ref:
+                continue
+            if not pdf_url and "pubmed.ncbi.nlm.nih.gov" in source_ref:
+                continue
+            try:
+                digests.append(
+                    self.paper_digest_service.digest_paper(
+                        source_ref,
+                        pdf_url=pdf_url,
+                        title=str(item.get("title") or source_ref),
+                        force=force,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.artifact_store.create(
+                    "deep_research_digest_error",
+                    {"source_ref": source_ref, "error": str(exc)},
+                    source_refs=[source_ref],
+                    created_by="deep_research_service",
+                )
+        return digests
