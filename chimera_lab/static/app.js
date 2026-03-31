@@ -1,5 +1,6 @@
 const state = {
   selectedMutationId: null,
+  selectedDeepResearchId: null,
   supervisorRunning: false,
 };
 
@@ -207,6 +208,116 @@ function renderLabNotebook(entries) {
     "No notebook entries",
     "Failure lessons and next-step hypotheses will appear here after the first failed run or failed mutation.",
   );
+}
+
+async function loadDeepResearchDetail(item) {
+  const artifact = await safeApi(`/artifacts/${item.artifact_id}`, null);
+  const sourceRefs = Array.isArray(artifact?.source_refs) ? artifact.source_refs : [];
+  const externalRefs = sourceRefs.filter((ref) => /^https?:/i.test(String(ref || "")));
+  const paperRefs = externalRefs.filter((ref) => /(arxiv\.org|pubmed\.ncbi\.nlm\.nih\.gov|doi\.org)/i.test(ref)).slice(0, 8);
+  const upstreamRefs = externalRefs.filter((ref) => !paperRefs.includes(ref)).slice(0, 8);
+  return {
+    artifactId: item.artifact_id,
+    query: item.query || "Untitled deep research run",
+    summary: item.summary || "No report summary was stored.",
+    paperCount: Number(item.paper_count || 0),
+    reportPath: item.report_path || "",
+    metadataPath: item.metadata_path || "",
+    bibtexPath: item.bibtex_path || "",
+    outputDir: item.output_dir || "",
+    createdAt: item.created_at,
+    paperRefs,
+    upstreamRefs,
+  };
+}
+
+function renderDeepResearchList(details) {
+  document.getElementById("deepResearchCount").textContent = String(details.length);
+  const el = document.getElementById("deepResearchList");
+  renderStackList(
+    el,
+    details,
+    (detail) => `
+      <button class="mutation-button ${detail.artifactId === state.selectedDeepResearchId ? "active" : ""}" data-deep-research-id="${escapeHtml(detail.artifactId)}" type="button">
+        <strong>${escapeHtml(truncate(detail.query, 72))}</strong>
+        <span>${escapeHtml(`${detail.paperCount} paper${detail.paperCount === 1 ? "" : "s"}`)}</span>
+        <small>${escapeHtml(formatTime(detail.createdAt))}</small>
+      </button>
+    `,
+    "No deep research yet",
+    "When the organism runs a literature sweep, it will stay listed here.",
+  );
+
+  el.querySelectorAll("[data-deep-research-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedDeepResearchId = button.dataset.deepResearchId;
+      renderDeepResearchList(details);
+      renderDeepResearchDetail(details.find((item) => item.artifactId === state.selectedDeepResearchId) || null);
+    });
+  });
+}
+
+function renderRefList(refs) {
+  if (!refs.length) {
+    return "<p>No external references were attached to this report.</p>";
+  }
+  return `
+    <ul>
+      ${refs.map((ref) => `<li><a href="${escapeHtml(ref)}" target="_blank" rel="noreferrer">${escapeHtml(ref)}</a></li>`).join("")}
+    </ul>
+  `;
+}
+
+function renderDeepResearchDetail(detail) {
+  const panel = document.getElementById("deepResearchDetail");
+  if (!detail) {
+    panel.innerHTML = `
+      <div class="focus-header">
+        <div>
+          <p class="eyebrow">Deep research history</p>
+          <h3>No deep research report selected</h3>
+        </div>
+      </div>
+      <p class="workspace-copy">Older literature sweeps will appear here once the organism runs them.</p>
+    `;
+    return;
+  }
+
+  panel.innerHTML = `
+    <div class="focus-header">
+      <div>
+        <p class="eyebrow">Deep research history</p>
+        <h3>${escapeHtml(truncate(detail.query, 120))}</h3>
+      </div>
+      <span class="status-chip">${escapeHtml(`${detail.paperCount} paper${detail.paperCount === 1 ? "" : "s"}`)}</span>
+    </div>
+    <div class="focus-grid">
+      <div class="focus-item">
+        <strong>What this research asked</strong>
+        <p>${escapeHtml(detail.query)}</p>
+      </div>
+      <div class="focus-item">
+        <strong>What the organism learned</strong>
+        <p>${escapeHtml(detail.summary)}</p>
+      </div>
+      <div class="focus-item">
+        <strong>When it ran</strong>
+        <p>${escapeHtml(formatTime(detail.createdAt))}</p>
+      </div>
+      <div class="focus-item">
+        <strong>Where the full report lives</strong>
+        <p>${escapeHtml(detail.outputDir || detail.reportPath || "No output path recorded.")}</p>
+      </div>
+    </div>
+    <div class="focus-subsection">
+      <strong>Paper references</strong>
+      ${renderRefList(detail.paperRefs)}
+    </div>
+    <div class="focus-subsection">
+      <strong>Other source references</strong>
+      ${renderRefList(detail.upstreamRefs)}
+    </div>
+  `;
 }
 
 function humanSourceLabel(sourceRef, scoutMap) {
@@ -587,6 +698,7 @@ async function refreshDashboard() {
     objectives,
     scoutCandidates,
     artifacts,
+    deepResearchHistory,
   ] = await Promise.all([
     safeApi("/missions", []),
     safeApi("/runs", []),
@@ -596,6 +708,7 @@ async function refreshDashboard() {
     safeApi("/objectives", []),
     safeApi("/scout/candidates", []),
     safeApi("/artifacts?limit=120", []),
+    safeApi("/research/deep-research?limit=12", []),
   ]);
 
   const scoutMap = new Map(scoutCandidates.map((item) => [item.source_ref, item]));
@@ -603,8 +716,14 @@ async function refreshDashboard() {
     .filter((run) => Boolean((run.input_payload || {}).mutation_parent_run_id))
     .slice(0, 8);
   const mutationDetails = await Promise.all(mutationRuns.map((run) => loadMutationDetail(run, scoutMap)));
+  const deepResearchDetails = await Promise.all(
+    reverseByDate(deepResearchHistory).slice(0, 8).map((item) => loadDeepResearchDetail(item)),
+  );
   if (!state.selectedMutationId || !mutationDetails.some((item) => item.run.id === state.selectedMutationId)) {
     state.selectedMutationId = mutationDetails[0]?.run.id || null;
+  }
+  if (!state.selectedDeepResearchId || !deepResearchDetails.some((item) => item.artifactId === state.selectedDeepResearchId)) {
+    state.selectedDeepResearchId = deepResearchDetails[0]?.artifactId || null;
   }
 
   const pendingObjectives = objectives.filter((item) => item.status === "pending").length;
@@ -628,6 +747,8 @@ async function refreshDashboard() {
     supervisorStatus,
   );
   renderMutationList(mutationDetails);
+  renderDeepResearchList(deepResearchDetails);
+  renderDeepResearchDetail(deepResearchDetails.find((item) => item.artifactId === state.selectedDeepResearchId) || null);
   renderMutationDetail(mutationDetails.find((item) => item.run.id === state.selectedMutationId) || null);
   renderLabNotebook(buildLabNotebookEntries(artifacts));
   renderThread(buildThread(runs, new Set(mutationRuns.map((item) => item.id))));

@@ -263,6 +263,20 @@ textarea {
   padding-left: 18px;
 }
 
+.focus-item p,
+.focus-subsection li {
+  overflow-wrap: anywhere;
+}
+
+.focus-subsection a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.focus-subsection a:hover {
+  text-decoration: underline;
+}
+
 .focus-actions {
   margin-top: 14px;
 }
