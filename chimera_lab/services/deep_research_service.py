@@ -293,10 +293,11 @@ class DeepResearcherService:
         for artifact in self.artifact_store.list(limit=max(limit * 5, 50)):
             if artifact["type"] != "deep_research_report":
                 continue
+            payload = self._enrich_report_payload(dict(artifact.get("payload") or {}))
             items.append(
                 {
                     "artifact_id": artifact["id"],
-                    **(artifact.get("payload") or {}),
+                    **payload,
                     "created_at": artifact.get("created_at"),
                 }
             )
@@ -369,6 +370,29 @@ class DeepResearcherService:
     def _summarize_report(self, report_text: str) -> str:
         lines = [line.strip() for line in report_text.splitlines() if line.strip() and not line.strip().startswith("<!--")]
         return " ".join(lines[:8])[:4000]
+
+    def _enrich_report_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        report_path = Path(str(payload.get("report_path") or "")).resolve() if payload.get("report_path") else None
+        bibtex_path = Path(str(payload.get("bibtex_path") or "")).resolve() if payload.get("bibtex_path") else None
+        report_text = report_path.read_text(encoding="utf-8") if report_path and report_path.exists() else ""
+        report_metadata = self._report_metadata(report_text) if report_text else {}
+        bibtex_text = bibtex_path.read_text(encoding="utf-8") if bibtex_path and bibtex_path.exists() else ""
+        parsed_papers = self._papers_from_bibtex(bibtex_text) if bibtex_text else []
+        enriched = dict(payload)
+        enriched["paper_count"] = max(
+            int(payload.get("paper_count") or 0),
+            int(report_metadata.get("papers_found") or 0),
+            len(parsed_papers),
+        )
+        if not enriched.get("summary") and report_text:
+            enriched["summary"] = self._summarize_report(report_text)
+        if report_metadata.get("synthesis_error") and not enriched.get("synthesis_error"):
+            enriched["synthesis_error"] = report_metadata["synthesis_error"]
+        if report_metadata.get("databases") and not enriched.get("databases"):
+            enriched["databases"] = report_metadata["databases"]
+        if report_metadata.get("year_range") and not enriched.get("year_range"):
+            enriched["year_range"] = report_metadata["year_range"]
+        return enriched
 
     def _report_metadata(self, report_text: str) -> dict[str, Any]:
         metadata: dict[str, Any] = {}

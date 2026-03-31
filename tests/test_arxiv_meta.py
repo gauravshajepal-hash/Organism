@@ -189,6 +189,10 @@ def test_deep_research_run_recovers_partial_success_from_report_and_bibtex(tmp_p
     assert result["metadata"]["databases"] == ["arxiv (20)", "openalex (20)", "crossref (20)"]
     assert result["paper_source_refs"] == ["https://arxiv.org/abs/2504.15228"]
 
+    recent = service.list_recent(limit=1)
+    assert recent[0]["paper_count"] == 60
+    assert recent[0]["synthesis_error"] == "Request timed out."
+
 
 def test_arxiv_scheduler_uses_recent_queries(tmp_path: Path) -> None:
     client = make_client(tmp_path)
