@@ -86,7 +86,7 @@ class AssimilationService:
             "grounding": grounding,
             "coverage": coverage,
             "source_count": len(candidates),
-            "source_types": sorted(source_types),
+            "source_types": sorted(list(source_types)),
             "missing_terms": missing_terms,
             "rewrite_hint": rewrite_hint,
         }
