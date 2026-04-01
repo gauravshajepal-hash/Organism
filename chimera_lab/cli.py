@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--frontier-provider",
         default=None,
         choices=["manual", "auto", "openai", "gemini"],
-        help="Override the frontier provider. Defaults to manual.",
+        help="Override the frontier provider. Defaults to the configured setting.",
     )
     run_parser.add_argument("--data-dir", default=None, help="Override CHIMERA_DATA_DIR.")
     run_parser.add_argument(
@@ -113,7 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--frontier-provider",
         default=None,
         choices=["manual", "auto", "openai", "gemini"],
-        help="Override the frontier provider. Defaults to manual.",
+        help="Override the frontier provider. Defaults to the configured setting.",
     )
     dev_parser.add_argument("--data-dir", default=None, help="Override CHIMERA_DATA_DIR.")
     dev_parser.set_defaults(handler=lambda ns: _run_server(argparse.Namespace(**{**vars(ns), "reload": True})))
