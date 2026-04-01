@@ -736,7 +736,21 @@ class MutationLab:
                 normalized = preferred
         if self.guardrails.settings.local_repair_single_file_only:
             chosen = normalized[0]
-            return [{"path": chosen["path"], "replacements": chosen["replacements"][:2]}]
+            preserved_violations = [
+                {
+                    "path": edit["path"],
+                    "replacements": edit["replacements"][:1],
+                }
+                for edit in edits
+                if str(edit.get("path") or "").strip()
+                and self._normalize_relative_path(str(edit.get("path"))) != chosen["path"]
+                and (
+                    not normalized_selected
+                    or self._normalize_relative_path(str(edit.get("path"))) not in normalized_selected
+                    or self.guardrails._is_high_risk_path(self._normalize_relative_path(str(edit.get("path"))))
+                )
+            ]
+            return [{"path": chosen["path"], "replacements": chosen["replacements"][:2]}, *preserved_violations[:2]]
         lower_operator = operator.lower()
         single_file = any(token in lower_operator for token in {"repair", "simplify", "stabilize", "diagnose"})
         if single_file:
