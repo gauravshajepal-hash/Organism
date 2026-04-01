@@ -136,6 +136,7 @@ def test_papers_arxiv_ingest_route_prefers_deep_research_engine(tmp_path: Path) 
 def test_deep_research_run_recovers_partial_success_from_report_and_bibtex(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     service = client.app.state.services.deep_researcher
+    service.settings.allow_local_deep_research_synthesis = True
     run_dir = tmp_path / "deep_research_run"
     run_dir.mkdir(parents=True)
     (run_dir / "report.md").write_text(
@@ -192,6 +193,24 @@ def test_deep_research_run_recovers_partial_success_from_report_and_bibtex(tmp_p
     recent = service.list_recent(limit=1)
     assert recent[0]["paper_count"] == 60
     assert recent[0]["synthesis_error"] == "Request timed out."
+
+
+def test_deep_research_ingest_skips_local_synthesis_without_frontier_provider(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    service = client.app.state.services.deep_researcher
+    service.settings.deep_research_enabled = True
+    service.settings.allow_local_deep_research_synthesis = False
+    service.settings.frontier_provider = "manual"
+
+    with (
+        patch.object(type(service), "is_available", return_value=True),
+        patch.object(type(client.app.state.services.paper_digest_service), "ingest_query", return_value={"query": "x", "results": [], "digests": [], "cached": True, "backoff_active": False}),
+    ):
+        payload = service.ingest_query("agent memory evaluation")
+
+    assert payload["engine"] == "arxiv_fallback"
+    artifacts = client.app.state.services.artifact_store.list(limit=20)
+    assert any(item["type"] == "deep_research_synthesis_skipped" for item in artifacts)
 
 
 def test_arxiv_scheduler_uses_recent_queries(tmp_path: Path) -> None:

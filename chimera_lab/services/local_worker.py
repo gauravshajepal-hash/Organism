@@ -24,7 +24,10 @@ class LocalWorker:
 
     def execute(self, mission: dict | None, program: dict | None, run: dict) -> dict[str, Any]:
         prompt = self._build_prompt(mission, program, run)
-        model_output = self._invoke_model(prompt)
+        if self._should_use_local_model(run):
+            model_output = self._invoke_model(prompt)
+        else:
+            model_output = self._deterministic_output(mission, program, run)
         output_artifact = self.artifact_store.create(
             "local_worker_output",
             {
@@ -170,7 +173,7 @@ class LocalWorker:
         selection_rationale = localization["selection_rationale"]
         if editable_files:
             selection_rationale = f"{selection_rationale}; editable scope for {operator}: {', '.join(editable_files)}"
-        selected_files = editable_files or localization["selected_files"]
+        selected_files = (editable_files or localization["selected_files"])[:1]
         payload = run.get("input_payload") or {}
         negative_memory = payload.get("mutation_negative_memory") or []
         prompt = "\n".join(
@@ -197,12 +200,10 @@ class LocalWorker:
                 ">>>>>>> REPLACE",
                 "<<<END FILE>>>",
                 "Rules:",
-                "- Edit only listed files.",
+                "- Edit only the single listed file.",
                 "- SEARCH content must match exactly.",
-                "- Default to a single FILE block on the highest-priority source file.",
-                "- Only touch multiple files if the focused test cannot possibly pass otherwise.",
+                "- Return exactly one FILE block.",
                 "- Prefer the smallest possible replacement over broad rewrites.",
-                "- Use one or more FILE blocks if needed.",
                 "- No markdown fences and no prose outside the required blocks.",
                 f"Editable file snapshots:\n{file_context}",
             ]
@@ -299,15 +300,47 @@ class LocalWorker:
     def _editable_files_for_operator(self, selected_files: list[str], focused_tests: list[str], operator: str) -> list[str]:
         if not selected_files:
             return []
+        source_files = [path for path in selected_files if path not in focused_tests]
+        ordered = source_files + [path for path in selected_files if path not in source_files]
+        if self.settings.local_repair_single_file_only:
+            return ordered[:1]
         lower_operator = operator.lower()
         max_files = min(self.settings.mutation_max_files, 3)
         if any(token in lower_operator for token in {"repair", "simplify", "stabilize", "diagnose"}):
             max_files = 1
         elif any(token in lower_operator for token in {"exploit", "optimize", "tighten"}):
             max_files = min(max_files, 2)
-        source_files = [path for path in selected_files if path not in focused_tests]
-        ordered = source_files + [path for path in selected_files if path not in source_files]
         return ordered[:max_files]
+
+    def _should_use_local_model(self, run: dict) -> bool:
+        return str(run.get("task_type") or "").lower() in {"code", "fix", "tool"}
+
+    def _deterministic_output(self, mission: dict | None, program: dict | None, run: dict) -> str:
+        payload = run.get("input_payload") or {}
+        task_type = str(run.get("task_type") or "").lower()
+        if task_type == "research_ingest":
+            deep = payload.get("deep_research_result") or {}
+            paper_count = int(deep.get("paper_count") or 0)
+            digest_count = int(deep.get("digest_count") or 0)
+            live_sources = payload.get("live_sources") or []
+            feed_refs = payload.get("feed_sync_refs") or []
+            gate = payload.get("source_quality_gate") or {}
+            if paper_count or digest_count:
+                return (
+                    f"Research ingest collected {paper_count} papers and {digest_count} digests. "
+                    f"Live sources: {len(live_sources)}. Feed refs: {len(feed_refs)}. "
+                    f"Source gate decision: {gate.get('decision', 'unknown')}."
+                )
+            return (
+                f"Research ingest refreshed sources without local synthesis. "
+                f"Live sources: {len(live_sources)}. Feed refs: {len(feed_refs)}. "
+                f"Source gate decision: {gate.get('decision', 'unknown')}."
+            )
+        if task_type == "status":
+            mission_goal = mission["goal"] if mission else "No mission linked."
+            program_objective = program["objective"] if program else "No program linked."
+            return f"Status request for mission '{mission_goal}' and program '{program_objective}'."
+        return "Deterministic local execution path selected."
 
     def _select_mutation_files(self, root: Path, preferred: list[str], run: dict, failure_context: str) -> tuple[list[Path], str]:
         if not root.exists():

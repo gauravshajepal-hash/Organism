@@ -37,6 +37,7 @@ class Settings:
     deep_research_output_dir: Path
     deep_research_default_provider: str
     deep_research_default_model: str
+    allow_local_deep_research_synthesis: bool
     deep_research_max_iterations: int
     deep_research_breadth: int
     deep_research_depth: int
@@ -87,6 +88,8 @@ class Settings:
     supervisor_meta_target_cooldown_minutes: int
     supervisor_stable_cycles_required: int
     supervisor_auto_promote_enabled: bool
+    frontier_review_required_for_promotion: bool
+    local_repair_single_file_only: bool
     supervisor_default_objectives: list[str]
 
 
@@ -133,14 +136,15 @@ def load_settings() -> Settings:
         deep_research_enabled=_env_flag("CHIMERA_ENABLE_DEEP_RESEARCH", background_default),
         deep_research_repo_dir=Path(os.getenv("CHIMERA_DEEP_RESEARCH_REPO_DIR", str(base / "external_tools" / "deep-researcher"))).resolve(),
         deep_research_output_dir=Path(os.getenv("CHIMERA_DEEP_RESEARCH_OUTPUT_DIR", str(base / "deep_research"))).resolve(),
-        deep_research_default_provider=os.getenv("CHIMERA_DEEP_RESEARCH_PROVIDER", "ollama").strip().lower(),
+        deep_research_default_provider=os.getenv("CHIMERA_DEEP_RESEARCH_PROVIDER", "auto").strip().lower(),
         deep_research_default_model=os.getenv("CHIMERA_DEEP_RESEARCH_MODEL", os.getenv("CHIMERA_LOCAL_MODEL", "qwen2.5-coder:7b")),
+        allow_local_deep_research_synthesis=_env_flag("CHIMERA_ALLOW_LOCAL_DEEP_RESEARCH_SYNTHESIS", False),
         deep_research_max_iterations=int(os.getenv("CHIMERA_DEEP_RESEARCH_MAX_ITERATIONS", "6")),
         deep_research_breadth=int(os.getenv("CHIMERA_DEEP_RESEARCH_BREADTH", "2")),
         deep_research_depth=int(os.getenv("CHIMERA_DEEP_RESEARCH_DEPTH", "1")),
         deep_research_timeout_seconds=int(os.getenv("CHIMERA_DEEP_RESEARCH_TIMEOUT_SECONDS", "900")),
         deep_research_email=(os.getenv("CHIMERA_DEEP_RESEARCH_EMAIL") or os.getenv("DEEP_RESEARCH_EMAIL") or "").strip() or None,
-        frontier_provider=os.getenv("CHIMERA_FRONTIER_PROVIDER", "manual").strip().lower(),
+        frontier_provider=os.getenv("CHIMERA_FRONTIER_PROVIDER", "auto").strip().lower(),
         frontier_model=os.getenv("CHIMERA_FRONTIER_MODEL", "gpt-5.4"),
         frontier_api_key=os.getenv("OPENAI_API_KEY"),
         frontier_base_url=os.getenv("CHIMERA_FRONTIER_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
@@ -198,6 +202,8 @@ def load_settings() -> Settings:
         supervisor_meta_target_cooldown_minutes=int(os.getenv("CHIMERA_SUPERVISOR_META_TARGET_COOLDOWN_MINUTES", "60")),
         supervisor_stable_cycles_required=int(os.getenv("CHIMERA_SUPERVISOR_STABLE_CYCLES_REQUIRED", "2")),
         supervisor_auto_promote_enabled=_env_flag("CHIMERA_SUPERVISOR_AUTO_PROMOTE", True),
+        frontier_review_required_for_promotion=_env_flag("CHIMERA_FRONTIER_REVIEW_REQUIRED_FOR_PROMOTION", True),
+        local_repair_single_file_only=_env_flag("CHIMERA_LOCAL_REPAIR_SINGLE_FILE_ONLY", True),
         supervisor_default_objectives=[
             item.strip()
             for item in os.getenv(

@@ -226,6 +226,7 @@ def create_app() -> FastAPI:
         artifact_store=artifact_store,
         mutation_lab=mutation_lab,
         review_tribunal=review_tribunal,
+        frontier_adapter=frontier_adapter,
         git_safety=git_safety,
         sandbox_runner=sandbox_runner,
     )

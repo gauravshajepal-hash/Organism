@@ -432,6 +432,9 @@ def test_auto_promotion_and_rollback_for_low_risk_candidate(tmp_path: Path) -> N
         "revert_commit": "revert123",
         "reason": reason,
     }
+    services.settings.frontier_provider = "openai"
+    services.settings.frontier_api_key = "test-key"
+    services.frontier_adapter._call_openai = lambda prompt: '{"decision":"approved","confidence":0.92,"notes":"Canary passed and the patch is narrow."}'  # type: ignore[method-assign]
 
     mission = services.storage.create_mission("Auto Promote", "Promote low-risk internal change", "high")
     program = services.storage.create_program(mission["id"], "Promote low-risk candidate", ["Pass canary"], {"time_budget": 300})
@@ -503,3 +506,89 @@ def test_auto_promotion_and_rollback_for_low_risk_candidate(tmp_path: Path) -> N
     }
     rollouts = services.rollout_manager.run_rollout_canaries()
     assert rollouts[0]["status"] == "rolled_back"
+
+
+def test_auto_promotion_blocks_without_configured_frontier_reviewer(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "chimera_lab" / "services").mkdir(parents=True)
+    (repo / "tests").mkdir()
+    (repo / "chimera_lab" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "chimera_lab" / "services" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "chimera_lab" / "services" / "assimilation_service.py").write_text(
+        "def score():\n    return 2\n",
+        encoding="utf-8",
+    )
+    (repo / "tests" / "test_quality.py").write_text(
+        "from chimera_lab.services.assimilation_service import score\n\n\ndef test_score():\n    assert score() >= 1\n",
+        encoding="utf-8",
+    )
+
+    client = make_client(tmp_path, repo_root=repo)
+    services = client.app.state.services
+    services.git_safety.status = lambda: {  # type: ignore[method-assign]
+        "repo_root": str(repo),
+        "repo_exists": True,
+        "remote_url": None,
+        "branch": "main",
+        "head": "base123",
+        "dirty": False,
+        "auto_push": False,
+    }
+
+    mission = services.storage.create_mission("Auto Promote", "Promote low-risk internal change", "high")
+    program = services.storage.create_program(mission["id"], "Promote low-risk candidate", ["Pass canary"], {"time_budget": 300})
+    parent_run = services.storage.create_task_run(
+        program_id=program["id"],
+        task_type="code",
+        worker_tier="local_executor",
+        instructions="Baseline run",
+        target_path=str(repo),
+        command="python -m pytest tests/test_quality.py -q",
+        time_budget=300,
+        token_budget=6000,
+        input_payload={},
+    )
+    candidate_root = tmp_path / "candidate-no-frontier"
+    candidate_root.mkdir()
+    (candidate_root / "chimera_lab" / "services").mkdir(parents=True)
+    (candidate_root / "chimera_lab" / "__init__.py").write_text("", encoding="utf-8")
+    (candidate_root / "chimera_lab" / "services" / "__init__.py").write_text("", encoding="utf-8")
+    (candidate_root / "chimera_lab" / "services" / "assimilation_service.py").write_text(
+        "def score():\n    return 2\n",
+        encoding="utf-8",
+    )
+    candidate_run = services.storage.create_task_run(
+        program_id=program["id"],
+        task_type="code",
+        worker_tier="local_executor",
+        instructions="Improve internal scoring thresholds only.",
+        target_path=str(candidate_root),
+        command="python -m pytest tests/test_quality.py -q",
+        time_budget=300,
+        token_budget=6000,
+        input_payload={
+            "mutation_parent_run_id": parent_run["id"],
+            "mutation_generated_by": "mutation_generator",
+            "mutation_generator_model_tier": "local_executor",
+        },
+    )
+    services.storage.update_task_run(candidate_run["id"], status="ready_for_promotion", result_summary="Awaiting promotion.")
+    services.artifact_store.create(
+        "mutation_candidate",
+        {
+            "candidate_run_id": candidate_run["id"],
+            "summary": "Raise internal score threshold safely.",
+            "applied_edits": [{"path": "chimera_lab/services/assimilation_service.py", "diff": "mock"}],
+            "apply_errors": [],
+            "selected_files": ["chimera_lab/services/assimilation_service.py"],
+            "selection_rationale": "low-risk allowlisted service",
+            "generated_by": "mutation_generator",
+            "generator_model_tier": "local_executor",
+        },
+        source_refs=[candidate_run["id"]],
+        created_by="test",
+    )
+
+    rollout = services.rollout_manager.auto_promote_candidate(candidate_run["id"])
+    assert rollout["status"] == "blocked_risk"
+    assert "frontier_reviewer_unconfigured" in (rollout.get("metadata") or {}).get("risk_reasons", [])

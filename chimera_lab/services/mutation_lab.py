@@ -730,23 +730,18 @@ class MutationLab:
             )
         if not normalized:
             return []
-        outside_selected: list[dict] = []
         if normalized_selected:
             preferred = [edit for edit in normalized if edit["path"] in normalized_selected]
-            outside_selected = [edit for edit in normalized if edit["path"] not in normalized_selected]
-            if preferred and not outside_selected:
+            if preferred:
                 normalized = preferred
+        if self.guardrails.settings.local_repair_single_file_only:
+            chosen = normalized[0]
+            return [{"path": chosen["path"], "replacements": chosen["replacements"][:2]}]
         lower_operator = operator.lower()
         single_file = any(token in lower_operator for token in {"repair", "simplify", "stabilize", "diagnose"})
         if single_file:
             chosen = normalized[0]
-            bounded = [{"path": chosen["path"], "replacements": chosen["replacements"][:2]}]
-            if outside_selected:
-                bounded.extend(
-                    {"path": edit["path"], "replacements": edit["replacements"][:1]}
-                    for edit in outside_selected[:2]
-                )
-            return bounded
+            return [{"path": chosen["path"], "replacements": chosen["replacements"][:2]}]
         return normalized[: max(1, min(len(normalized), self.guardrails.settings.mutation_max_files))]
 
     def _promotion_review_verdict(self, candidate: dict) -> dict | None:
@@ -776,6 +771,10 @@ class MutationLab:
                 continue
             reviewer_type = str(verdict.get("reviewer_type") or "").strip().lower()
             reviewer_model_tier = str(verdict.get("model_tier") or "").strip().lower()
+            if self.guardrails.settings.frontier_review_required_for_promotion:
+                is_frontier = reviewer_model_tier.startswith("frontier") or reviewer_type.startswith("frontier")
+                if not is_frontier:
+                    continue
             distinct_reviewer_type = bool(reviewer_type) and reviewer_type != generator_reviewer_type
             distinct_model_tier = bool(reviewer_model_tier) and reviewer_model_tier != generator_model_tier
             if not (distinct_reviewer_type or distinct_model_tier):

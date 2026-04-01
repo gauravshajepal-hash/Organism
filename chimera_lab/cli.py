@@ -8,6 +8,8 @@ from typing import Sequence
 
 import uvicorn
 
+from chimera_lab.config import load_settings
+
 
 def _set_default_env(name: str, value: str) -> None:
     if not os.getenv(name):
@@ -49,23 +51,21 @@ def _run_server(args: argparse.Namespace) -> int:
     _set_default_env("CHIMERA_ENABLE_SUPERVISOR", "1")
     _set_default_env("CHIMERA_ENABLE_BACKGROUND_INGESTION", "1")
     _set_default_env("CHIMERA_ENABLE_OLLAMA", "1")
-    _set_default_env("CHIMERA_FRONTIER_PROVIDER", "manual")
     if args.model:
         os.environ["CHIMERA_LOCAL_MODEL"] = args.model
-    else:
-        _set_default_env("CHIMERA_LOCAL_MODEL", "qwen3.5:9b")
     if args.frontier_provider:
         os.environ["CHIMERA_FRONTIER_PROVIDER"] = args.frontier_provider
     if args.data_dir:
         os.environ["CHIMERA_DATA_DIR"] = args.data_dir
+    settings = load_settings()
     selected_port, port_changed = _select_port(args.host, args.port)
     _print_startup_summary(
         host=args.host,
         port=selected_port,
-        model=os.environ["CHIMERA_LOCAL_MODEL"],
-        frontier_provider=os.environ["CHIMERA_FRONTIER_PROVIDER"],
-        supervisor_enabled=os.environ.get("CHIMERA_ENABLE_SUPERVISOR", "0") == "1",
-        background_ingestion_enabled=os.environ.get("CHIMERA_ENABLE_BACKGROUND_INGESTION", "0") == "1",
+        model=settings.local_model,
+        frontier_provider=settings.frontier_provider,
+        supervisor_enabled=settings.supervisor_enabled,
+        background_ingestion_enabled=settings.background_ingestion_enabled,
         port_changed=port_changed,
     )
 

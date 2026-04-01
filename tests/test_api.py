@@ -674,8 +674,8 @@ def answer() -> int:
     review = client.post(
         f"/runs/{candidate['id']}/review",
         json={
-            "reviewer_type": "mutation_second_layer",
-            "model_tier": "local_executor",
+            "reviewer_type": "frontier_auditor",
+            "model_tier": "frontier_auditor",
             "decision": "approved",
             "notes": "The mutation is scoped correctly and safe to absorb.",
             "confidence": 0.9,
@@ -847,7 +847,8 @@ def answer() -> int:
     low_conf_review = client.post(
         f"/runs/{candidate_id}/review",
         json={
-            "reviewer_type": "mutation_second_layer",
+            "reviewer_type": "frontier_auditor",
+            "model_tier": "frontier_auditor",
             "decision": "approved",
             "notes": "Low-confidence review should not pass the gate.",
             "confidence": 0.4,
@@ -864,7 +865,8 @@ def answer() -> int:
     reject_review = client.post(
         f"/runs/{candidate_id}/review",
         json={
-            "reviewer_type": "mutation_second_layer",
+            "reviewer_type": "frontier_auditor",
+            "model_tier": "frontier_auditor",
             "decision": "reject",
             "notes": "Reject verdict should not satisfy the gate.",
             "confidence": 0.95,

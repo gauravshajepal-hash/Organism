@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import re
+
 import httpx
 
 from chimera_lab.config import Settings
@@ -41,6 +44,29 @@ class FrontierAdapter:
             source_refs=[run_id],
             created_by="frontier_adapter",
         )
+
+    def has_auto_provider(self) -> bool:
+        return self._resolve_provider() in {"openai", "gemini"}
+
+    def review_mutation_candidate(
+        self,
+        run: dict,
+        mission: dict | None,
+        program: dict | None,
+        review_context: dict,
+    ) -> dict:
+        provider = self._resolve_provider()
+        if provider not in {"openai", "gemini"}:
+            raise RuntimeError("frontier_reviewer_unconfigured")
+        prompt = self._build_mutation_review_prompt(run, mission, program, review_context)
+        if provider == "openai":
+            content = self._call_openai(prompt)
+        else:
+            content = self._call_gemini(prompt)
+        review = self._parse_structured_review(content)
+        review["raw_content"] = content
+        review["provider"] = provider
+        return review
 
     def _build_prompt(self, run: dict, mission: dict | None, program: dict | None, reviewer_type: str) -> str:
         mission_goal = mission["goal"] if mission else "No mission linked."
@@ -84,6 +110,27 @@ class FrontierAdapter:
             ]
         )
 
+    def _build_mutation_review_prompt(self, run: dict, mission: dict | None, program: dict | None, review_context: dict) -> str:
+        mission_goal = mission["goal"] if mission else "No mission linked."
+        program_objective = program["objective"] if program else "No program linked."
+        return "\n".join(
+            [
+                "You are Chimera Lab's frontier mutation reviewer.",
+                "Decide whether a low-risk mutation candidate should be promoted after canary passed.",
+                "Return JSON only with keys: decision, confidence, notes.",
+                "decision must be one of: approved, revise, rejected.",
+                f"Mission goal: {mission_goal}",
+                f"Program objective: {program_objective}",
+                f"Run instructions: {run['instructions']}",
+                f"Run command: {run.get('command') or 'N/A'}",
+                f"Review context: {review_context}",
+                "Approval standard:",
+                "- approve only if the change is narrow, test-grounded, and unlikely to introduce hidden regressions",
+                "- choose revise if evidence is mixed or too weak",
+                "- choose rejected if the candidate should not be absorbed",
+            ]
+        )
+
     def _try_auto_request(self, run: dict, reviewer_type: str, prompt: str) -> dict | None:
         provider = self._resolve_provider()
         if provider == "manual":
@@ -114,6 +161,41 @@ class FrontierAdapter:
                 return "gemini"
             return "manual"
         return provider
+
+    def _parse_structured_review(self, content: str) -> dict:
+        text = (content or "").strip()
+        candidate = text
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            candidate = match.group(0)
+        try:
+            payload = json.loads(candidate)
+            decision = str(payload.get("decision") or "revise").strip().lower()
+            confidence = float(payload.get("confidence") or 0.0)
+            notes = str(payload.get("notes") or text).strip()
+            return {
+                "decision": decision if decision in {"approved", "revise", "rejected"} else "revise",
+                "confidence": max(0.0, min(1.0, confidence)),
+                "notes": notes[:4000],
+                "reviewer_type": "frontier_auditor",
+                "model_tier": "frontier_auditor",
+            }
+        except Exception:  # noqa: BLE001
+            lowered = text.lower()
+            if "rejected" in lowered or "reject" in lowered:
+                decision = "rejected"
+            elif "approved" in lowered or "approve" in lowered:
+                decision = "approved"
+            else:
+                decision = "revise"
+            confidence = 0.8 if decision == "approved" else 0.4
+            return {
+                "decision": decision,
+                "confidence": confidence,
+                "notes": text[:4000] or "Frontier review returned unstructured output.",
+                "reviewer_type": "frontier_auditor",
+                "model_tier": "frontier_auditor",
+            }
 
     def _call_openai(self, prompt: str) -> str:
         if not self.settings.frontier_api_key:

@@ -8,6 +8,7 @@ from typing import Any
 from chimera_lab.config import Settings
 from chimera_lab.db import Storage
 from chimera_lab.services.artifact_store import ArtifactStore
+from chimera_lab.services.frontier_adapter import FrontierAdapter
 from chimera_lab.services.git_safety import GitSafetyService
 from chimera_lab.services.mutation_lab import MutationLab
 from chimera_lab.services.review_tribunal import ReviewTribunal
@@ -25,6 +26,7 @@ class EvolutionRolloutManager:
     artifact_store: ArtifactStore
     mutation_lab: MutationLab
     review_tribunal: ReviewTribunal
+    frontier_adapter: FrontierAdapter
     git_safety: GitSafetyService
     sandbox_runner: SandboxRunner
     low_risk_files: set[str] = field(init=False)
@@ -109,14 +111,82 @@ class EvolutionRolloutManager:
             )
             return updated
 
+        if self.settings.frontier_review_required_for_promotion and not self.frontier_adapter.has_auto_provider():
+            updated = self.storage.update_mutation_rollout(
+                rollout["id"],
+                status="blocked_risk",
+                metadata={**(rollout.get("metadata") or {}), "risk_reasons": ["frontier_reviewer_unconfigured"], "canary": canary},
+            )
+            self.artifact_store.create(
+                "mutation_auto_promotion_blocked",
+                {"candidate_run_id": candidate_run_id, "reasons": ["frontier_reviewer_unconfigured"]},
+                source_refs=[candidate_run_id, rollout["id"]],
+                created_by="evolution_rollout",
+            )
+            return updated
+
+        program = self.storage.get_program(candidate["program_id"])
+        mission = self.storage.get_mission(program["mission_id"]) if program else None
+        mutation_artifact = self._mutation_candidate_artifact(candidate_run_id)
+        try:
+            frontier_review = self.frontier_adapter.review_mutation_candidate(
+                candidate,
+                mission,
+                program,
+                {
+                    "canary": canary,
+                    "mutation_candidate": mutation_artifact.get("payload") if mutation_artifact else {},
+                    "risk_class": risk["risk_class"],
+                    "risk_reasons": risk["reasons"],
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            updated = self.storage.update_mutation_rollout(
+                rollout["id"],
+                status="blocked_risk",
+                metadata={**(rollout.get("metadata") or {}), "risk_reasons": ["frontier_review_error"], "review_error": str(exc), "canary": canary},
+            )
+            self.artifact_store.create(
+                "mutation_auto_promotion_blocked",
+                {
+                    "candidate_run_id": candidate_run_id,
+                    "reasons": ["frontier_review_error"],
+                    "error": str(exc),
+                },
+                source_refs=[candidate_run_id, rollout["id"]],
+                created_by="evolution_rollout",
+            )
+            return updated
         review = self.review_tribunal.review(
             candidate_run_id,
-            reviewer_type="auto_canary_referee",
-            decision="approved",
-            notes="Low-risk mutation passed isolated canary evaluation.",
-            confidence=max(0.7, float(canary["confidence"])),
-            model_tier="supervisor",
+            reviewer_type=frontier_review["reviewer_type"],
+            decision=frontier_review["decision"],
+            notes=frontier_review["notes"],
+            confidence=float(frontier_review["confidence"]),
+            model_tier=frontier_review["model_tier"],
         )
+        if frontier_review["decision"] != "approved":
+            updated = self.storage.update_mutation_rollout(
+                rollout["id"],
+                status="blocked_risk",
+                metadata={
+                    **(rollout.get("metadata") or {}),
+                    "risk_reasons": ["frontier_review_not_approved"],
+                    "canary": canary,
+                    "review_id": review["id"],
+                },
+            )
+            self.artifact_store.create(
+                "mutation_auto_promotion_blocked",
+                {
+                    "candidate_run_id": candidate_run_id,
+                    "reasons": ["frontier_review_not_approved"],
+                    "review_id": review["id"],
+                },
+                source_refs=[candidate_run_id, rollout["id"], review["id"]],
+                created_by="evolution_rollout",
+            )
+            return updated
 
         pre_checkpoint = self.git_safety.checkpoint(f"pre-auto-promotion-{candidate_run_id}", push=True)
         pre_checkpoint_ok = pre_checkpoint.get("status") in {"ok", "push_reconciled", "push_only_ok", "push_verified", "clean_noop"}

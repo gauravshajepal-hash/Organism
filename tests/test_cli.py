@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 from chimera_lab import cli
 
@@ -20,6 +21,8 @@ def test_select_port_uses_next_free_port(monkeypatch) -> None:
 
 
 def test_run_server_uses_selected_port_and_defaults(monkeypatch, tmp_path) -> None:
+    os.environ.pop("CHIMERA_LOCAL_MODEL", None)
+    os.environ.pop("CHIMERA_FRONTIER_PROVIDER", None)
     args = argparse.Namespace(
         host="127.0.0.1",
         port=8000,
@@ -50,5 +53,5 @@ def test_run_server_uses_selected_port_and_defaults(monkeypatch, tmp_path) -> No
     assert captured["run_kwargs"]["host"] == "127.0.0.1"
     assert captured["summary"]["port"] == 8003
     assert captured["summary"]["port_changed"] is True
-    assert captured["summary"]["model"] == "qwen3.5:9b"
-    assert captured["summary"]["frontier_provider"] == "manual"
+    assert captured["summary"]["model"] == "qwen2.5-coder:7b"
+    assert captured["summary"]["frontier_provider"] == "auto"

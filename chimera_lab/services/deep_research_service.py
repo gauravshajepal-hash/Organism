@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import hashlib
 import re
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,7 +42,7 @@ class DeepResearcherService:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def is_available(self) -> bool:
-        return self.repo_dir.exists() and shutil.which("deep-researcher") is not None
+        return (self.repo_dir / "src" / "deep_researcher" / "__main__.py").exists()
 
     def run(
         self,
@@ -53,9 +54,12 @@ class DeepResearcherService:
         breadth: int | None = None,
         depth: int | None = None,
         source_refs: list[str] | None = None,
-        ) -> dict[str, Any]:
+    ) -> dict[str, Any]:
         if not self.is_available():
             raise RuntimeError("deep_researcher_unavailable")
+        resolved_provider = self._resolve_provider(provider)
+        if resolved_provider is None:
+            raise RuntimeError("deep_research_frontier_provider_unavailable")
         normalized_query = " ".join(str(query or "").split()).strip()
         if not normalized_query:
             raise ValueError("deep_research_query_required")
@@ -78,12 +82,14 @@ class DeepResearcherService:
             capture_output=True,
             text=True,
             timeout=self.settings.deep_research_timeout_seconds,
-            env=self._env(provider=provider),
+            env=self._env(provider=resolved_provider),
         )
         if process.returncode != 0:
             payload = {
                 "query": normalized_query,
                 "command": command,
+                "provider": resolved_provider,
+                "model": model or self._resolved_model(model),
                 "returncode": process.returncode,
                 "stdout": process.stdout[-4000:],
                 "stderr": process.stderr[-4000:],
@@ -123,8 +129,8 @@ class DeepResearcherService:
             {
                 "query": normalized_query,
                 "command": command,
-                "provider": provider or self.settings.deep_research_default_provider,
-                "model": model or self.settings.deep_research_default_model,
+                "provider": resolved_provider,
+                "model": model or self._resolved_model(model),
                 "output_dir": str(run_dir),
                 "started_at": started_at,
                 "finished_at": _utc_now(),
@@ -200,8 +206,8 @@ class DeepResearcherService:
             )
         return {
             "query": normalized_query,
-            "provider": provider or self.settings.deep_research_default_provider,
-            "model": model or self.settings.deep_research_default_model,
+            "provider": resolved_provider,
+            "model": model or self._resolved_model(model),
             "output_dir": str(run_dir),
             "paper_count": paper_count,
             "paper_source_refs": paper_refs[:50],
@@ -225,7 +231,8 @@ class DeepResearcherService:
     ) -> dict[str, Any]:
         requested_max_results = max_results or self.settings.arxiv_max_results_per_query
         requested_digest_top_n = self.settings.arxiv_digest_top_n if digest_top_n is None else digest_top_n
-        if self.settings.deep_research_enabled and self.is_available():
+        resolved_provider = self._resolve_provider(provider)
+        if self.settings.deep_research_enabled and self.is_available() and resolved_provider is not None:
             try:
                 result = self.run(
                     query,
@@ -275,6 +282,16 @@ class DeepResearcherService:
                     source_refs=list(source_refs or []),
                     created_by="deep_research_service",
                 )
+        elif self.settings.deep_research_enabled and self.is_available():
+            self.artifact_store.create(
+                "deep_research_synthesis_skipped",
+                {
+                    "query": query,
+                    "reason": "no_supported_frontier_provider_configured",
+                },
+                source_refs=list(source_refs or []),
+                created_by="deep_research_service",
+            )
 
         if self.paper_digest_service is None:
             raise RuntimeError("paper_digest_service_unavailable")
@@ -316,10 +333,14 @@ class DeepResearcherService:
         depth: int | None,
         output_dir: Path,
     ) -> list[str]:
-        resolved_provider = provider or self.settings.deep_research_default_provider
-        resolved_model = model or self.settings.deep_research_default_model
+        resolved_provider = self._resolve_provider(provider)
+        if resolved_provider is None:
+            raise RuntimeError("deep_research_frontier_provider_unavailable")
+        resolved_model = model or self._resolved_model(model)
         command = [
-            "deep-researcher",
+            sys.executable,
+            "-m",
+            "deep_researcher",
             query,
             "--provider",
             resolved_provider,
@@ -342,13 +363,42 @@ class DeepResearcherService:
 
     def _env(self, *, provider: str | None) -> dict[str, str]:
         env = os.environ.copy()
-        resolved_provider = provider or self.settings.deep_research_default_provider
+        resolved_provider = self._resolve_provider(provider)
+        src_dir = str((self.repo_dir / "src").resolve())
+        existing_pythonpath = env.get("PYTHONPATH", "").strip()
+        env["PYTHONPATH"] = src_dir if not existing_pythonpath else f"{src_dir}{os.pathsep}{existing_pythonpath}"
+        if resolved_provider is None:
+            return env
         if resolved_provider == "ollama":
             env["OPENAI_BASE_URL"] = f"{self.settings.ollama_url.rstrip('/')}/v1"
             env["OPENAI_API_KEY"] = "ollama"
+        elif resolved_provider == "openai" and self.settings.frontier_api_key:
+            env["OPENAI_BASE_URL"] = self.settings.frontier_base_url
+            env["OPENAI_API_KEY"] = self.settings.frontier_api_key
         if self.settings.deep_research_email:
             env["DEEP_RESEARCH_EMAIL"] = self.settings.deep_research_email
         return env
+
+    def _resolve_provider(self, provider: str | None) -> str | None:
+        supported = {"ollama", "lmstudio", "openai", "anthropic", "groq", "deepseek", "openrouter", "together"}
+        requested = (provider or self.settings.deep_research_default_provider or "").strip().lower()
+        if requested and requested not in {"auto", "frontier"}:
+            if requested not in supported:
+                return None
+            if requested == "ollama" and not self.settings.allow_local_deep_research_synthesis:
+                return None
+            return requested
+        frontier_provider = (self.settings.frontier_provider or "").strip().lower()
+        if frontier_provider == "openai" and self.settings.frontier_api_key:
+            return "openai"
+        if frontier_provider == "auto" and self.settings.frontier_api_key:
+            return "openai"
+        if self.settings.allow_local_deep_research_synthesis and self.settings.enable_ollama:
+            return "ollama"
+        return None
+
+    def _resolved_model(self, model: str | None) -> str:
+        return model or self.settings.deep_research_default_model
 
     def _latest_run_dir(self, session_root: Path) -> Path:
         candidates = [path for path in session_root.iterdir() if path.is_dir()]
